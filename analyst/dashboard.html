@@ -4,75 +4,113 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trading Desk</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
 <style>
   :root {
-    --surface: #1a1a19; --surface-2: #242423; --surface-3: #2e2e2c;
-    --ink: #ececea; --ink-2: #b8b8b4; --ink-3: #8a8a85;
-    --line: #3a3a38;
+    --surface: #1a1a19; --card: #222221; --card-2: #2a2a28; --inset: #161615;
+    --ink: #f0f0ee; --ink-2: #b4b4af; --ink-3: #83837d;
+    --line: #33332f; --line-soft: #2b2b28;
     --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
     --accent: #6ea8d8;
+    --radius: 12px;
   }
   * { box-sizing: border-box; margin: 0; }
+  html { scrollbar-color: var(--line) var(--surface); }
   body { background: var(--surface); color: var(--ink);
-         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; padding: 20px; }
-  h1 { font-size: 18px; font-weight: 600; }
-  h2 { font-size: 13px; font-weight: 600; color: var(--ink-2);
-       text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
-  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
-  #meta { color: var(--ink-3); font-size: 12px; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
-          border-radius: 999px; font-size: 12px; background: var(--surface-3); }
-  .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
-  .card { background: var(--surface-2); border: 1px solid var(--line);
-          border-radius: 10px; padding: 14px 16px; }
-  .card.wide { grid-column: 1 / -1; }
-  .tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+         font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
+         padding: 0 24px 40px; }
+  .wrap { max-width: 1360px; margin: 0 auto; }
+
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+           padding: 18px 0 16px; position: sticky; top: 0; z-index: 5;
+           background: linear-gradient(var(--surface) 82%, transparent); }
+  h1 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+  h1 .logo { color: var(--good); margin-right: 2px; }
+  #meta { color: var(--ink-3); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 3px 12px;
+          border-radius: 999px; font-size: 12px; font-weight: 600;
+          background: var(--card-2); border: 1px solid var(--line); color: var(--ink-2); }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .chip.open { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); color: var(--ink); }
+
+  .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
            margin-bottom: 14px; }
-  .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
-          padding: 10px 14px; }
-  .tile .label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
-  .tile .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .tile .sub { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .tile { background: linear-gradient(180deg, var(--card-2), var(--card));
+          border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px 12px; }
+  .tile .label { font-size: 11px; font-weight: 600; color: var(--ink-3);
+                 text-transform: uppercase; letter-spacing: .08em; }
+  .tile .value { font-size: 26px; font-weight: 650; letter-spacing: -.02em;
+                 font-variant-numeric: tabular-nums; margin: 2px 0 1px; }
+  .tile .sub { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: var(--radius); padding: 0; overflow: hidden; }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 { font-size: 12px; font-weight: 650; color: var(--ink-2);
+             text-transform: uppercase; letter-spacing: .08em;
+             padding: 12px 18px 10px; border-bottom: 1px solid var(--line-soft);
+             display: flex; align-items: center; gap: 8px; }
+  .card h2 .count { margin-left: auto; font-weight: 600; color: var(--ink-3);
+                    background: var(--inset); border-radius: 999px; padding: 0 9px; font-size: 11px; }
+  .card .body { padding: 10px 18px 14px; }
+
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th { text-align: left; font-size: 11px; color: var(--ink-3); text-transform: uppercase;
-       letter-spacing: .05em; padding: 4px 8px 6px 0; border-bottom: 1px solid var(--line); }
-  td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { text-align: left; font-size: 10.5px; font-weight: 650; color: var(--ink-3);
+       text-transform: uppercase; letter-spacing: .07em;
+       padding: 6px 10px 7px 0; border-bottom: 1px solid var(--line-soft); }
+  td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 13.5px; }
+  tbody tr { transition: background .12s; }
+  tbody tr:hover { background: color-mix(in srgb, var(--card-2) 70%, transparent); }
   tr:last-child td { border-bottom: none; }
-  .num { text-align: right; }
-  th.num { text-align: right; }
+  .num, th.num { text-align: right; }
+  .ticker { font-weight: 650; letter-spacing: .01em; }
   .pos { color: var(--good); } .neg { color: var(--critical); }
-  .sev { font-weight: 600; font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px;
+          font-weight: 600; background: var(--inset); }
+  .pill.good { color: var(--good); }
+  .pill.warn { color: var(--warning); }
+  .pill.crit { color: var(--critical); }
   .muted { color: var(--ink-3); }
   .small { font-size: 12px; color: var(--ink-2); }
-  ul.attention { list-style: none; }
-  ul.attention li { padding: 7px 0; border-bottom: 1px solid var(--line); }
-  ul.attention li:last-child { border-bottom: none; }
+
+  ul.attention { list-style: none; display: grid; gap: 8px; }
+  ul.attention li { background: var(--inset); border: 1px solid var(--line-soft);
+                    border-left: 3px solid var(--ink-3); border-radius: 8px; padding: 9px 14px; }
+  ul.attention li.critical { border-left-color: var(--critical); }
+  ul.attention li.warning  { border-left-color: var(--warning); }
+  ul.attention li.info     { border-left-color: var(--accent); }
+  .sev { font-weight: 700; font-size: 11px; letter-spacing: .06em; }
+
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .empty { color: var(--ink-3); font-style: italic; padding: 6px 0; }
-  #error-banner { display: none; background: var(--surface-3); border: 1px solid var(--critical);
-                  border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+  .empty { color: var(--ink-3); padding: 14px 0 8px; text-align: center; font-size: 13px; }
+  .empty .glyph { display: block; font-size: 20px; margin-bottom: 4px; opacity: .75; }
+  #error-banner { display: none; background: var(--card); border: 1px solid var(--critical);
+                  border-radius: 8px; padding: 9px 14px; margin-bottom: 12px; font-size: 13px; }
+  @media (max-width: 640px) { body { padding: 0 12px 24px; } .tile .value { font-size: 22px; } }
 </style>
 </head>
 <body>
+<div class="wrap">
 <header>
-  <h1>Trading Desk</h1>
+  <h1><span class="logo">▲</span> Trading Desk</h1>
   <span class="chip" id="market-chip"><span class="dot" style="background:var(--ink-3)"></span>loading…</span>
-  <span class="chip" id="paper-chip"><span class="dot" style="background:var(--good)"></span>PAPER</span>
+  <span class="chip"><span class="dot" style="background:var(--good)"></span>PAPER</span>
   <span id="meta">connecting…</span>
 </header>
 <div id="error-banner"></div>
 <div class="tiles" id="tiles"></div>
 <div class="grid">
-  <div class="card wide" id="card-attention"><h2>⚠ Needs attention</h2><div id="attention"></div></div>
-  <div class="card wide"><h2>Positions &amp; protection</h2><div id="positions"></div></div>
-  <div class="card"><h2>Signals today</h2><div id="signals"></div></div>
-  <div class="card"><h2>Orders today</h2><div id="orders"></div></div>
-  <div class="card"><h2>Corrections &amp; errors</h2><div id="corrections"></div></div>
-  <div class="card"><h2>R&amp;D — nightly verdicts</h2><div id="rd"></div></div>
-  <div class="card"><h2>Improvement proposals (unreviewed)</h2><div id="proposals"></div></div>
-  <div class="card"><h2>Reports</h2><div id="reports"></div></div>
+  <div class="card wide"><h2>⚠️ Needs attention <span class="count" id="att-count"></span></h2><div class="body" id="attention"></div></div>
+  <div class="card wide"><h2>🛡 Positions &amp; protection <span class="count" id="pos-count"></span></h2><div class="body" id="positions"></div></div>
+  <div class="card"><h2>📡 Signals today</h2><div class="body" id="signals"></div></div>
+  <div class="card"><h2>🧾 Orders today</h2><div class="body" id="orders"></div></div>
+  <div class="card"><h2>🩹 Corrections &amp; errors</h2><div class="body" id="corrections"></div></div>
+  <div class="card"><h2>🔬 R&amp;D — nightly verdicts</h2><div class="body" id="rd"></div></div>
+  <div class="card"><h2>💡 Proposals awaiting review <span class="count" id="prop-count"></span></h2><div class="body" id="proposals"></div></div>
+  <div class="card"><h2>📄 Reports</h2><div class="body" id="reports"></div></div>
+</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -88,22 +126,26 @@ const t = iso => {
   if (s.includes(" ") && !s.includes("T")) s = s.replace(" ", "T") + "Z";
   return new Date(s).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 };
-const SEV = { critical: ["var(--critical)", "⛔"], warning: ["var(--warning)", "⚠️"], info: ["var(--accent)", "ℹ️"] };
+const SEV_ICON = { critical: "⛔", warning: "⚠️", info: "ℹ️" };
+const SEV_COLOR = { critical: "var(--critical)", warning: "var(--warning)", info: "var(--accent)" };
 
 function table(headers, rows, numCols) {
-  if (!rows.length) return '<div class="empty">nothing to show</div>';
+  if (!rows.length) return "";
   const th = headers.map((h,i) => `<th class="${(numCols||[]).includes(i)?"num":""}">${esc(h)}</th>`).join("");
   const body = rows.map(r => "<tr>" + r.map((c,i) =>
     `<td class="${(numCols||[]).includes(i)?"num":""}">${c}</td>`).join("") + "</tr>").join("");
   return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
 }
+const empty = (glyph, msg) => `<div class="empty"><span class="glyph">${glyph}</span>${esc(msg)}</div>`;
 
 function render(s) {
   const clock = s.clock || {};
   const open = clock.is_open === true;
-  $("market-chip").innerHTML = `<span class="dot" style="background:${open?"var(--good)":"var(--ink-3)"}"></span>` +
-    (open ? `market open · closes ${t(clock.next_close)}` : `market closed · opens ${clock.next_open ? new Date(clock.next_open).toLocaleString([], {weekday:"short", hour:"2-digit", minute:"2-digit"}) : "—"}`);
-  $("meta").textContent = `updated ${t(s.generated_at)} · auto-refresh 15s · read-only`;
+  const chip = $("market-chip");
+  chip.className = "chip" + (open ? " open" : "");
+  chip.innerHTML = `<span class="dot" style="background:${open?"var(--good)":"var(--ink-3)"}"></span>` +
+    (open ? `MARKET OPEN · closes ${t(clock.next_close)}` : `market closed · opens ${clock.next_open ? new Date(clock.next_open).toLocaleString([], {weekday:"short", hour:"2-digit", minute:"2-digit"}) : "—"}`);
+  $("meta").textContent = `updated ${t(s.generated_at)} · refreshes 15s · read-only`;
 
   const acc = s.accounts || {};
   let tiles = "";
@@ -111,23 +153,22 @@ function render(s) {
     if (a.error) { tiles += `<div class="tile"><div class="label">${esc(name)}</div><div class="value neg">unreachable</div></div>`; continue; }
     const b = a.benchmark;
     tiles += `
-      <div class="tile"><div class="label">${esc(name)} equity</div>
+      <div class="tile"><div class="label">${esc(name)} · equity</div>
         <div class="value">${fmtUsd(a.equity)}</div>
         <div class="sub ${signCls(a.today_pnl)}">${a.today_pnl >= 0 ? "▲" : "▼"} ${fmtUsd(a.today_pnl)} today</div></div>
-      <div class="tile"><div class="label">${esc(name)} vs SPY</div>
+      <div class="tile"><div class="label">${esc(name)} · alpha vs SPY</div>
         <div class="value ${signCls(b && b.alpha_pct)}">${b ? fmtPct(b.alpha_pct) : "—"}</div>
-        <div class="sub">${b ? `${fmtPct(b.portfolio_return_pct)} vs ${fmtPct(b.benchmark_return_pct)} since ${b.start_date}` : "no baseline"}</div></div>`;
+        <div class="sub">${b ? `${fmtPct(b.portfolio_return_pct)} vs ${fmtPct(b.benchmark_return_pct)} since ${b.start_date}` : "no baseline seeded"}</div></div>`;
   }
   $("tiles").innerHTML = tiles;
 
   const att = s.attention || [];
+  $("att-count").textContent = att.length || "";
   $("attention").innerHTML = att.length
-    ? `<ul class="attention">` + att.map(i => {
-        const [color, icon] = SEV[i.severity] || SEV.info;
-        return `<li><span class="sev" style="color:${color}">${icon} ${esc(i.severity.toUpperCase())}</span>
-                &nbsp; ${esc(i.what)}<div class="small">${esc(i.why)}</div></li>`;
-      }).join("") + `</ul>`
-    : `<div class="empty">✅ all clear — no anomalies detected</div>`;
+    ? `<ul class="attention">` + att.map(i =>
+        `<li class="${esc(i.severity)}"><span class="sev" style="color:${SEV_COLOR[i.severity]}">${SEV_ICON[i.severity]} ${esc(i.severity.toUpperCase())}</span>
+         &nbsp; ${esc(i.what)}<div class="small">${esc(i.why)}</div></li>`).join("") + `</ul>`
+    : empty("✅", "all clear — no anomalies detected");
 
   let posRows = [];
   for (const [name, a] of Object.entries(acc)) {
@@ -135,25 +176,30 @@ function render(s) {
       const stop = (a.stops || {})[p.symbol];
       const prot = stop
         ? (stop.status === "new" || stop.status === "accepted"
-            ? `<span class="pos">🛡 ${fmtUsd(stop.stop_price)} ${esc(stop.time_in_force.toUpperCase())}</span>`
-            : `<span style="color:var(--warning)">⏳ ${esc(stop.status)}</span>`)
-        : `<span class="neg">⛔ NONE</span>`;
-      posRows.push([esc(p.symbol), esc(name), p.qty, fmtUsd(p.avg_entry_price), fmtUsd(p.current_price),
-        `<span class="${signCls(p.unrealized_pl)}">${fmtUsd(p.unrealized_pl)}</span>`, prot]);
+            ? `<span class="pill good">🛡 ${fmtUsd(stop.stop_price)} · ${esc(stop.time_in_force.toUpperCase())}</span>`
+            : `<span class="pill warn">⏳ ${esc(stop.status)}</span>`)
+        : `<span class="pill crit">⛔ NO STOP</span>`;
+      const plPct = p.avg_entry_price ? (p.current_price / p.avg_entry_price - 1) * 100 : null;
+      posRows.push([`<span class="ticker">${esc(p.symbol)}</span>`, `<span class="muted">${esc(name)}</span>`,
+        p.qty, fmtUsd(p.avg_entry_price), fmtUsd(p.current_price),
+        `<span class="${signCls(p.unrealized_pl)}">${fmtUsd(p.unrealized_pl)} (${fmtPct(plPct)})</span>`, prot]);
     }
   }
-  $("positions").innerHTML = table(["Ticker","Account","Qty","Entry","Now","Unrealized","Stop"], posRows, [2,3,4,5]);
+  $("pos-count").textContent = posRows.length || "";
+  $("positions").innerHTML = table(["Ticker","Account","Qty","Entry","Now","Unrealized","Protection"], posRows, [2,3,4,5]) || empty("💤", "no open positions");
 
   const dbs = s.db || {};
   $("signals").innerHTML = table(["Time","Ticker","Action","Strategy","Status"],
-    (dbs.signals_today || []).map(x => [t(x.created_at)+"", esc(x.ticker), esc(x.action), esc(x.strategy), esc(x.status)]));
+    (dbs.signals_today || []).map(x => [t(x.created_at), `<span class="ticker">${esc(x.ticker)}</span>`, esc(x.action), `<span class="muted">${esc(x.strategy)}</span>`, esc(x.status)]))
+    || empty("📭", "no signals generated today");
   $("orders").innerHTML = table(["Time","Ticker","Side","Qty","Status","Fill"],
-    (dbs.orders_today || []).map(o => [t(o.submitted_at), esc(o.ticker), esc(o.side), o.qty, esc(o.status), o.fill_price ? fmtUsd(o.fill_price) : "—"]), [3]);
+    (dbs.orders_today || []).map(o => [t(o.submitted_at), `<span class="ticker">${esc(o.ticker)}</span>`, esc(o.side), o.qty, esc(o.status), o.fill_price ? fmtUsd(o.fill_price) : "—"]), [3])
+    || empty("📭", "no orders placed today");
 
   const logs = s.logs || {}, corr = s.corrections || {};
   let cHtml = "";
   if ((corr.mistakes || []).length)
-    cHtml += corr.mistakes.map(m => `<div style="padding:5px 0"><b>${esc(m.summary)}</b><div class="small">↳ ${esc(m.corrected_action)}</div></div>`).join("") +
+    cHtml += corr.mistakes.map(m => `<div style="padding:6px 0"><b>${esc(m.summary)}</b><div class="small">↳ ${esc(m.corrected_action)}</div></div>`).join("") +
              `<div class="small muted">from daily review ${esc(corr.narrative_date)}</div>`;
   const errs = (logs.errors_today || []);
   if (errs.length)
@@ -161,22 +207,26 @@ function render(s) {
       errs.map(e => [t(e.logged_at), esc(e.source), `<span class="small">${esc(String(e.detail).slice(0,140))}</span>`])) + `</div>`;
   const rej = (dbs.rejected_signals_recent || []);
   if (rej.length)
-    cHtml += `<div style="margin-top:8px"><div class="small muted">rejected signals (3d)</div>` +
-      table(["Ticker","Action","Why"], rej.slice(0,6).map(r => [esc(r.ticker), esc(r.action), `<span class="small">${esc(String(r.reasoning).slice(0,120))}</span>`])) + `</div>`;
-  $("corrections").innerHTML = cHtml || '<div class="empty">no corrections or errors on record today</div>';
+    cHtml += `<div style="margin-top:8px"><div class="small muted" style="margin-bottom:4px">rejected signals · last 3 days</div>` +
+      table(["Ticker","Action","Why"], rej.slice(0,6).map(r => [`<span class="ticker">${esc(r.ticker)}</span>`, esc(r.action), `<span class="small">${esc(String(r.reasoning).slice(0,120))}</span>`])) + `</div>`;
+  $("corrections").innerHTML = cHtml || empty("🧘", "no corrections or errors on record today");
 
   const nights = (logs.rd_nightly_tail || []);
   $("rd").innerHTML = (nights.length
     ? table(["Date","Verdict"], nights.slice().reverse().map(n => [esc(n.date || (n.logged_at||"").slice(0,10)), esc(n.verdict || JSON.stringify(n).slice(0,120))]))
-    : '<div class="empty">no nightly R&D runs yet — first run is tonight 5:30 PM</div>') +
-    `<div class="small muted" style="margin-top:6px">latest backtests: ` +
-    (dbs.backtest_runs || []).slice(0,3).map(b => `${esc(b.strategy)} ${b.total_return != null ? fmtPct(b.total_return*100) : "—"}`).join(" · ") + `</div>`;
+    : empty("🌙", "no nightly R&D runs yet — first run tonight 5:30 PM")) +
+    `<div class="small muted" style="margin-top:8px">latest backtests: ` +
+    ((dbs.backtest_runs || []).slice(0,3).map(b => `${esc(b.strategy)} <span class="${signCls(b.total_return)}">${b.total_return != null ? fmtPct(b.total_return*100) : "—"}</span>`).join(" · ") || "none") + `</div>`;
 
-  $("proposals").innerHTML = table(["Title","Filed"],
-    (dbs.unreviewed_proposals || []).map(p => [`${esc(p.source_title || p.strategy_summary.slice(0,60))}<div class="small">${esc(String(p.strategy_summary).slice(0,110))}</div>`, t(p.created_at)]));
+  const props = (dbs.unreviewed_proposals || []);
+  $("prop-count").textContent = props.length || "";
+  $("proposals").innerHTML = table(["Proposal","Filed"],
+    props.map(p => [`${esc(p.source_title || p.strategy_summary.slice(0,60))}<div class="small">${esc(String(p.strategy_summary).slice(0,110))}</div>`, t(p.created_at)]))
+    || empty("🗂", "queue is empty — R&D files proposals here for your review");
 
   $("reports").innerHTML = table(["File","Updated"],
-    (s.reports || []).map(r => [`<a href="/reports/${encodeURIComponent(r.name)}" target="_blank">${esc(r.name)}</a>`, esc(r.modified.replace("T"," "))]));
+    (s.reports || []).map(r => [`<a href="/reports/${encodeURIComponent(r.name)}" target="_blank">${esc(r.name)}</a>`, `<span class="muted">${esc(r.modified.replace("T"," "))}</span>`]))
+    || empty("📄", "no reports yet");
 }
 
 async function tick() {
