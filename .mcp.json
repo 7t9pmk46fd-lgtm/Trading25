@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "trading-desk": {
+      "command": "A:\\trading-desk\\venv\\Scripts\\python.exe",
+      "args": ["A:\\trading-desk\\mcp_server.py"]
+    }
+  }
+}

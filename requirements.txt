@@ -11,3 +11,6 @@ trafilatura>=1.8          # news article text extraction
 youtube-transcript-api>=0.6  # YouTube transcript fetching
 reportlab
 matplotlib
+
+# MCP server (mcp_server.py)
+mcp>=1.0

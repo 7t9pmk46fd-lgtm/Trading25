@@ -7,3 +7,7 @@ data/*.jsonl
 .claude/settings.local.json
 .claude/*.tmp.*
 data/cache/
+
+# Generated reports/artifacts (restructure 2026-08-02)
+Reports/
+data/daily_review_work/

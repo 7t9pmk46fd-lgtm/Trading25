@@ -20,11 +20,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rd-agent"))
 
-from data.alpaca_data import get_daily_bars
+from shared.market_data import get_daily_bars
 from shared.db import db_session, init_db, set_account_baseline
 
 BASELINES = {

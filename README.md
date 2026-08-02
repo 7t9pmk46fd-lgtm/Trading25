@@ -1,157 +1,141 @@
 # Trading Desk
 
-A multi-agent personal trading system, replacing Ledger Desk with a fresh
-build. Three agents, deliberately separated by responsibility:
+A multi-agent personal trading system (Alpaca paper trading). Three
+agents, deliberately separated by responsibility, over a shared core:
 
-| Agent | Role | Can it touch real/paper trades? |
+| Package | Role | Can it touch real/paper trades? |
 |---|---|---|
-| `rd-agent` | Screens/backtests quantitative strategies (swing/daily timeframe) | No — only produces signals |
-| `day-trading-agent` | Intraday mean-reversion, PDT-aware, risk-gated | No — only produces signals |
-| `execution-agent` | Places orders via Alpaca | Yes — this is the only agent that trades |
-| `learning-agent` | Ingests news/YouTube, extracts research notes | No — output requires human review + promotion into a coded strategy before it can ever influence a trade |
-| `shared/risk.py` | Not an agent — the risk rules enforced on any entry signal | Blocks, doesn't just warn |
+| `signals/` | Strategy research: screeners, backtests, signal generation (swing `rd_mean_reversion` + intraday `sneaky_pivot`) | No — only queues signals |
+| `execution/` | Places orders via Alpaca, re-validates every signal against live account state | Yes — the ONLY package that trades |
+| `analyst/` | Ingests news/YouTube into research notes; builds the daily review PDF | No — research output requires human review + a coded, backtested strategy before it can ever influence a trade |
+| `shared/` | Config, SQLite ledger, risk rules, market data client | Risk rules block, don't just warn |
+| `mcp_server.py` | MCP server exposing the desk to AI agents (see below) | No — analysis/simulation only, by hard design |
 
-## Status (as of this build)
+Restructured 2026-08-02 from the original five agent directories
+(`rd-agent`, `day-trading-agent`, `execution-agent`, `learning-agent`) —
+same code and strategy names, consolidated layout, no more `sys.path`
+gymnastics. Older dates in docstrings refer to the old layout; git
+history has the full story.
 
-- ✅ `shared/db.py` — SQLite schema (`signals`, `orders`, `backtest_runs`,
-  `research_notes`) and helper functions. Tested locally.
-- ✅ `shared/config.py` — env-var based config for Alpaca + Anthropic credentials.
-- ✅ `rd-agent/screeners/mean_reversion.py` — z-score mean-reversion signal
-  logic. Validated against synthetic data (correctly catches a clean
-  dip-and-recovery; correctly produces losses on a mismatched-period sine
-  wave, confirming no lookahead bias / no artificial inflation).
-- ✅ `rd-agent/backtest/engine.py` — single-asset backtest engine (equity
-  curve, Sharpe, max drawdown, win rate). Validated against synthetic data.
-- ✅ `learning-agent/` — news + YouTube ingestion, Claude-based extraction,
-  research note storage and review CLI. Logic validated where possible
-  without network access (URL parsing, import wiring); the actual
-  fetch/extract calls need to run in your environment with real credentials.
-- ✅ `day-trading-agent/` — intraday mean-reversion screener with mandatory
-  EOD flatten, PDT-aware and circuit-breaker-gated signal generation.
-  Validated against synthetic data, including a real bug found and fixed
-  during testing (see `day-trading-agent/SKILL.md`).
-- ✅ `shared/risk.py` — PDT rule enforcement, daily circuit breaker,
-  stop-loss-aware position sizing. Validated with deliberate failure tests
-  (PDT breach, circuit breaker trip, invalid inputs).
-- ✅ `rd-agent/data/alpaca_data.py` — Alpaca historical/intraday data client.
-  Confirmed working against the real paper API as of 2026-07-20 (see
-  `execution-agent/SKILL.md`) — `get_daily_bars` successfully pulled real
-  AAPL bars.
-- ✅ `execution-agent/` — order placement via Alpaca, defense-in-depth risk
-  re-checking against LIVE account state (Alpaca's own PDT flag/day-trade
-  count treated as authoritative). Tested with a mocked Alpaca client
-  covering healthy/PDT-blocked/circuit-breaker-blocked/PDT-exempt cases.
-  `smoke_test.py` (read-only) also confirmed against a real paper account
-  on 2026-07-20, which caught and fixed a null-handling bug in
-  `alpaca_client.get_account_snapshot` (see `execution-agent/SKILL.md`).
-  The dry-run execution loop and `--live` order path are still untested
-  against the real API. Defaults to dry-run; `--live` required to actually
-  submit orders.
-- 🔲 Portfolio-level backtesting (multiple tickers, capital allocation).
-  Currently single-ticker only.
-- ✅ `execution-agent/scripts/reconcile_orders.py` — polls Alpaca for
-  unreconciled local orders and writes fill status/price back. Confirmed
-  working against a real filled order (2026-07-20). Manual/on-demand only
-  — not scheduled automatically.
-- 🔲 Weight-based (vs fixed-qty) signal sizing — not supported by the
-  execution agent yet; those signals are rejected rather than guessed at.
+## Layout
 
-## Important limitation on this build
+```
+shared/        config.py, db.py (SQLite ledger), risk.py (PDT/circuit-breaker/sizing),
+               market_data.py (Alpaca bars + cache), benchmark.py (vs SPY)
+signals/       screeners/ (mean_reversion, sneaky_pivot), backtest/ (engine + real-data
+               backtests), generate_signal.py (queues signals for both strategies)
+execution/     alpaca_client.py (the only order-placing module), run_execution_loop.py,
+               trail_stops.py, reconcile_orders.py, smoke_test.py
+analyst/       ingest/ (news, youtube), extract.py (Claude), ingest_source.py,
+               review_notes.py, daily_review.py (PDF report)
+scripts/       run_cycle.py (+ .bat, scheduled daily), run_sneaky_pivot_cycle.py,
+               seed_account_baselines.py
+mcp_server.py  MCP server (stdio); .mcp.json registers it for Claude Code
+```
 
-Everything above was originally built and validated in a sandboxed
-environment with **no network access**. That means:
-- Backtest/screener *logic* is genuinely tested (via synthetic data).
-- Anything requiring live API calls (Alpaca, Anthropic, YouTube, news
-  sites) was written against the documented APIs but had not been run
-  against real endpoints as of the initial build.
+## MCP server
 
-Since then, `execution-agent/scripts/smoke_test.py`, the live execution
-loop (dry-run and `--live`), and order reconciliation have all been run
-successfully against a real Alpaca paper account (2026-07-20) — see
-`execution-agent/SKILL.md`. Two real bugs were caught and fixed in the
-process (a null `daytrade_count` on a fresh account, and a NaN-vs-None
-signal bug that produced a false "sell" signal). Learning-agent's
-Anthropic/news/YouTube calls are still untested against real endpoints.
+`mcp_server.py` exposes the desk's capabilities as MCP tools so any
+MCP-capable agent (Claude Code picks it up automatically via `.mcp.json`)
+can work with the system directly:
 
-## Performance
+- `portfolio_status` — equity, P&L, positions, standing stops, alpha vs SPY (portfolio tracker)
+- `recent_activity` — signals/orders from the local ledger
+- `historical_analysis` — return/volatility/ATR/z-score stats per symbol
+- `run_screener` — what each strategy currently sees, analysis-only
+- `risk_check` — position sizing + PDT/circuit-breaker gates for a hypothetical entry (risk manager)
+- `backtest` — simulate a strategy over real history using the production screener code
+- `market_research` / `list_research_notes` — ingest news/YouTube into quarantined research notes
 
-`rd-agent/scripts/generate_signal.py` exposes `generate_and_queue_batch()`,
-used by `run_cycle.py` for watchlist scans. It fetches daily bars for the
-whole watchlist in a single Alpaca call (`alpaca_data.get_daily_bars`
-already accepts a symbol list) and fetches account/open-position state at
-most once per cycle (lazily, so a cycle with zero buy signals never
-touches those endpoints at all), instead of once per ticker. Benchmarked
-2026-07-20 on the default 11-ticker watchlist: 6.60s (sequential
-per-ticker calls) → 1.88s (batched), same results. Per-ticker fault
-isolation was preserved (one ticker's exception is caught and recorded as
-`status: error` without aborting the rest of the batch) and verified with
-a simulated failure.
+**Hard boundary**: the MCP server can never place, modify, or cancel an
+order, and never writes to the `signals` table. The only path to a real
+trade remains `execution/run_execution_loop.py --live`.
+
+External market-data MCPs (TradingView screeners, financial statements,
+news) can complement these tools; they're configured at the Claude Code
+user level, not in this repo.
+
+## Status
+
+- ✅ Both strategies live on separate Alpaca paper accounts:
+  `rd_mean_reversion` on the default account (scheduled daily cycle),
+  `sneaky_pivot` on its own account (15-min cycle when scheduled; PDT and
+  circuit-breaker state isolated by design since 2026-07-28).
+- ✅ Every buy carries a real broker-side stop (2xATR), with
+  `execution/trail_stops.py` ratcheting stops up and force-converting
+  Alpaca's DAY-TIF OTO stop legs to GTC (a real expiry bug found
+  2026-07-27 — see `execution/SKILL.md`).
+- ✅ Backtested against real data with SPY benchmark comparison
+  (`signals/backtest/`, results in the `backtest_runs` table).
+- ✅ Daily PDF review (`analyst/daily_review.py`): P&L, positions,
+  orders, stop activity, watchlist moves, benchmark, mistakes log.
+- 🔲 Portfolio-level backtesting (multi-ticker capital allocation).
+- 🔲 Weight-based signal sizing (execution rejects weight-only signals
+  rather than guessing).
+- 🔲 Short support (long-only end to end, deliberately).
 
 ## Full autonomous mode
 
-`scripts/run_cycle.py` chains rd-agent signal generation (across
-`shared.config.WATCHLIST`) → live risk-gated execution → order
-reconciliation into one unattended cycle, logging every run to
-`data/cycle_log.jsonl` (JSONL, one line per run — this is the only
-after-the-fact visibility, since nothing here waits for approval).
+Windows Task Scheduler task `TradingDeskDailyCycle` runs
+`scripts/run_cycle.bat` (Mon–Wed 9:45 AM ET): watchlist scan → signal
+queue → live risk-gated execution → fill reconciliation, logged to
+`data/cycle_log.jsonl`. No per-trade human approval — the JSONL logs and
+the daily review PDF are the after-the-fact visibility.
 
-As of 2026-07-20, a Windows Task Scheduler task (`TradingDeskDailyCycle`)
-runs `scripts/run_cycle.bat` Monday–Wednesday at 9:45 AM (adjusted same
-day to exclude Thursday/Friday), submitting real (paper) orders with no
-per-trade human approval. Manage it with:
 ```powershell
 Get-ScheduledTask -TaskName TradingDeskDailyCycle       # check status
 Disable-ScheduledTask -TaskName TradingDeskDailyCycle    # pause
 Unregister-ScheduledTask -TaskName TradingDeskDailyCycle # remove
 ```
-Credentials come from `A:\trading-desk\.env` (gitignored — copy
-`.env.example` and fill in real values; never commit it).
 
-**Known gap in this mode**: `rd-agent/screeners/mean_reversion.py`
-recomputes its position purely from price history each run, with no
-awareness of your actual Alpaca holdings. `generate_signal.py` guards
-against the most acute risk (re-entering a ticker you already hold), but
-if a real position stays open longer than the ~90-day/60-trading-day
-lookback window fetched each run, the original entry bar could roll out
-of that window before an exit condition ever fires — meaning the
-strategy might silently never generate an exit for a real open position.
-This is why every buy also carries a real broker-side stop (see below) —
-it bounds the downside even if the strategy's own exit signal never
-fires. Watch open positions periodically regardless; don't assume the
-automation will always close them on its own initiative.
+The sneaky_pivot intraday cycle (`scripts/run_sneaky_pivot_cycle.py`) is
+dry-run by default and only trades with an explicit `--live`; a dry-run
+expires every signal it evaluates so no other live cycle can pick one up
+(a real cross-cycle execution bug, fixed 2026-07-29).
 
-**Protective stops** (added 2026-07-20): every buy is now submitted with
-a real stop-loss order placed directly with Alpaca (2xATR below entry,
-see `execution-agent/SKILL.md`), not just a locally-computed number —
-this protects the position continuously, independent of whether this
-system's schedule ever fires again. The pre-existing NFLX position (open
-before this existed) was retroactively protected the same way. This
-bounds losses; it doesn't eliminate them — a large enough overnight gap
-can still fill worse than the stop price.
+## Risk rules (enforced in code, not just documented)
+
+- **PDT**: under $25k equity, max 3 day trades per rolling 5 days —
+  blocks, doesn't warn. Alpaca's own `daytrade_count`/PDT flag treated as
+  authoritative; the local counter is a second layer.
+- **Daily circuit breaker**: new entries blocked once today's P&L hits
+  -2.5% of equity. Exits are NEVER blocked by any risk rule.
+- **Sizing**: positions sized so a full stop-out risks ~1% of equity,
+  capped at 10% of equity per position.
+- **Every buy needs a real stop**: signals without `stop_price` (or
+  without `qty`) are rejected at execution, never guessed.
+- A stop bounds losses, it doesn't eliminate them — an overnight gap can
+  fill below the stop price.
 
 ## Setup
 
 ```bash
 python -m venv venv
-source venv/bin/activate   # or venv\Scripts\activate on Windows
+venv\Scripts\activate            # Windows
 pip install -r requirements.txt
 
-export ALPACA_API_KEY=...
-export ALPACA_SECRET_KEY=...
-export ALPACA_PAPER=true
-export ANTHROPIC_API_KEY=...
-
-python -m shared.db   # initializes the database
+copy .env.example .env           # then fill in real keys (never committed)
+python -m shared.db              # initialize the database
+python execution/smoke_test.py   # read-only connectivity check — run this first
 ```
 
-## Design principles carried through this build
+Credentials come from `A:\trading-desk\.env` (gitignored), loaded by
+`shared/config.py` for scheduled/unattended runs. `ALPACA_PAPER=true` is
+the default; the sneaky_pivot account uses `SNEAKY_PIVOT_ALPACA_API_KEY`
+/ `SNEAKY_PIVOT_ALPACA_SECRET_KEY`.
+
+## Design principles
+
 1. **Separation of concerns** — an agent that decides *what* to do never
-   also has the authority to *do it* to a live account. Only
-   `execution-agent` talks to Alpaca for order placement.
-2. **No silent trust of unreliable input** — learning-agent output is
-   quarantined from the trading pipeline until a human promotes it.
-3. **Same data path in backtest and live** — using Alpaca's data API for
-   both, wherever practical, to avoid backtest/live data mismatches.
-4. **Honest backtesting** — no lookahead bias (signals use prior-day
-   positions), synthetic edge-case tests included to catch bugs before
-   they hide inside a plausible-looking equity curve.
+   also has the authority to *do it*. Only `execution/` talks to Alpaca
+   for order placement; the MCP server inherits the same boundary.
+2. **No silent trust of unreliable input** — analyst output is
+   quarantined from the trading pipeline until a human promotes it into a
+   coded, backtested strategy.
+3. **Same data path in backtest and live** — Alpaca's data API for both,
+   and backtests reuse the exact production screener functions.
+4. **Honest backtesting** — no lookahead bias, synthetic edge-case tests,
+   and SPY buy-and-hold reported alongside every result.
+5. **Fail loudly** — unknown signal values raise, missing qty/stop
+   rejects, blocked trades are logged with reasons, every unattended run
+   writes a durable JSONL record.

@@ -18,10 +18,8 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "rd-agent" / "scripts"))
-sys.path.insert(0, str(ROOT / "execution-agent" / "scripts"))
 
 from shared.config import WATCHLIST, PROJECT_ROOT
 
@@ -37,9 +35,9 @@ def _log(entry: dict) -> None:
 
 
 def run_cycle() -> dict:
-    from generate_signal import generate_and_queue_batch
-    from run_execution_loop import process_pending_signals
-    from reconcile_orders import reconcile
+    from signals.generate_signal import generate_and_queue_batch
+    from execution.run_execution_loop import process_pending_signals
+    from execution.reconcile_orders import reconcile
 
     started_at = datetime.now(timezone.utc).isoformat()
     try:
