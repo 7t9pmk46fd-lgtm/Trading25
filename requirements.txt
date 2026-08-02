@@ -1,0 +1,13 @@
+# Core data/backtest (rd-agent)
+pandas>=2.0
+numpy>=1.24
+
+# Alpaca (rd-agent data, execution-agent)
+alpaca-py>=0.30
+
+# Learning agent
+anthropic>=0.40
+trafilatura>=1.8          # news article text extraction
+youtube-transcript-api>=0.6  # YouTube transcript fetching
+reportlab
+matplotlib

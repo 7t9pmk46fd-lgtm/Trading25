@@ -1,0 +1,463 @@
+{
+  "date": "2026-07-29",
+  "generated_at": "2026-07-29T20:53:11.868313+00:00",
+  "account": {
+    "equity": 99721.87,
+    "today_pnl": -803.4600000000064,
+    "buying_power": 351456.33
+  },
+  "open_positions": [
+    {
+      "symbol": "AMD",
+      "qty": 13.0,
+      "avg_entry_price": 480.308462,
+      "current_price": 424.9141,
+      "unrealized_pl": -720.126706
+    },
+    {
+      "symbol": "GOOGL",
+      "qty": 31.0,
+      "avg_entry_price": 319.126774,
+      "current_price": 332.9,
+      "unrealized_pl": 426.970006
+    },
+    {
+      "symbol": "NVDA",
+      "qty": 52.0,
+      "avg_entry_price": 191.19,
+      "current_price": 189.8424,
+      "unrealized_pl": -70.0752
+    },
+    {
+      "symbol": "TSLA",
+      "qty": 28.0,
+      "avg_entry_price": 321.01,
+      "current_price": 295.9364,
+      "unrealized_pl": -702.0608
+    }
+  ],
+  "orders_today": [
+    {
+      "id": 11,
+      "signal_id": 13,
+      "ticker": "MSFT",
+      "side": "buy",
+      "qty": 25.0,
+      "order_type": "market",
+      "alpaca_order_id": "60c5b323-66d7-410e-bece-18b440bcf930",
+      "status": "filled",
+      "is_paper": 1,
+      "submitted_at": "2026-07-29 14:45:06",
+      "filled_at": "2026-07-29 14:45:07.177340+00:00",
+      "fill_price": 394.49,
+      "notes": "",
+      "strategy": "sneaky_pivot"
+    },
+    {
+      "id": 12,
+      "signal_id": 14,
+      "ticker": "NVDA",
+      "side": "buy",
+      "qty": 52.0,
+      "order_type": "market",
+      "alpaca_order_id": "ecc408fd-a05e-4e28-a809-5245aec6b42f",
+      "status": "filled",
+      "is_paper": 1,
+      "submitted_at": "2026-07-29 14:45:07",
+      "filled_at": "2026-07-29 14:45:08.161942+00:00",
+      "fill_price": 191.19,
+      "notes": "",
+      "strategy": "rd_mean_reversion"
+    }
+  ],
+  "signals_today": [
+    {
+      "id": 13,
+      "ticker": "MSFT",
+      "action": "buy",
+      "strategy": "sneaky_pivot",
+      "qty": 25.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "opening bar low 389.15 tagged buy zone (range_low=391.30, swing_low=387.99), sneaky bar confirmed green, entry on breakout above 392.71",
+      "status": "executed",
+      "created_at": "2026-07-29 14:37:23",
+      "updated_at": "2026-07-29 14:45:06",
+      "stop_price": 387.57885785714285
+    },
+    {
+      "id": 14,
+      "ticker": "NVDA",
+      "action": "buy",
+      "strategy": "rd_mean_reversion",
+      "qty": 52.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "signal=enter_long, zscore=-1.90, close=191.11, atr=7.77, stop_price=175.57, sizing={'qty': 52, 'position_dollars': np.float64(9937.720000000001), 'position_pct_of_equity': np.float64(0.0993175300279592), 'max_loss_if_stopped': np.float64(808.2724000000001), 'binding_constraint': 'max_position_pct'}",
+      "status": "executed",
+      "created_at": "2026-07-29 14:45:05",
+      "updated_at": "2026-07-29 14:45:07",
+      "stop_price": 175.5663
+    },
+    {
+      "id": 15,
+      "ticker": "SOFI",
+      "action": "buy",
+      "strategy": "sneaky_pivot",
+      "qty": 656.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "opening bar low 15.03 tagged buy zone (range_low=16.17, swing_low=None), sneaky bar confirmed green, entry on breakout above 15.20",
+      "status": "expired",
+      "created_at": "2026-07-29 14:54:37",
+      "updated_at": "2026-07-29 15:08:24",
+      "stop_price": 14.871970000000001
+    },
+    {
+      "id": 16,
+      "ticker": "SOFI",
+      "action": "buy",
+      "strategy": "sneaky_pivot",
+      "qty": 652.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "opening bar low 15.03 tagged buy zone (range_low=16.17, swing_low=None), sneaky bar confirmed green, entry on breakout above 15.20",
+      "status": "expired",
+      "created_at": "2026-07-29 15:07:25",
+      "updated_at": "2026-07-29 15:08:24",
+      "stop_price": 14.871970000000001
+    },
+    {
+      "id": 17,
+      "ticker": "SOFI",
+      "action": "buy",
+      "strategy": "sneaky_pivot",
+      "qty": 651.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "opening bar low 15.03 tagged buy zone (range_low=16.17, swing_low=None), sneaky bar confirmed green, entry on breakout above 15.20",
+      "status": "expired",
+      "created_at": "2026-07-29 15:08:33",
+      "updated_at": "2026-07-29 15:08:34",
+      "stop_price": 14.871970000000001
+    },
+    {
+      "id": 18,
+      "ticker": "SOFI",
+      "action": "buy",
+      "strategy": "sneaky_pivot",
+      "qty": 651.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "opening bar low 15.03 tagged buy zone (range_low=16.17, swing_low=None), sneaky bar confirmed green, entry on breakout above 15.20",
+      "status": "expired",
+      "created_at": "2026-07-29 15:22:22",
+      "updated_at": "2026-07-29 15:22:23",
+      "stop_price": 14.871970000000001
+    },
+    {
+      "id": 19,
+      "ticker": "MSFT",
+      "action": "sell",
+      "strategy": "sneaky_pivot",
+      "qty": 25.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "exit_long",
+      "status": "expired",
+      "created_at": "2026-07-29 18:22:22",
+      "updated_at": "2026-07-29 18:22:23",
+      "stop_price": null
+    },
+    {
+      "id": 20,
+      "ticker": "MSFT",
+      "action": "sell",
+      "strategy": "sneaky_pivot",
+      "qty": 25.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "exit_long",
+      "status": "expired",
+      "created_at": "2026-07-29 18:37:23",
+      "updated_at": "2026-07-29 18:37:24",
+      "stop_price": null
+    },
+    {
+      "id": 21,
+      "ticker": "MSFT",
+      "action": "sell",
+      "strategy": "sneaky_pivot",
+      "qty": 25.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "exit_long",
+      "status": "expired",
+      "created_at": "2026-07-29 18:52:24",
+      "updated_at": "2026-07-29 18:52:25",
+      "stop_price": null
+    },
+    {
+      "id": 22,
+      "ticker": "MSFT",
+      "action": "sell",
+      "strategy": "sneaky_pivot",
+      "qty": 25.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "exit_long",
+      "status": "expired",
+      "created_at": "2026-07-29 19:07:25",
+      "updated_at": "2026-07-29 19:07:26",
+      "stop_price": null
+    }
+  ],
+  "signal_counts": {
+    "executed": 2,
+    "expired": 8
+  },
+  "errors": [],
+  "stop_events": [
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 304.13,
+      "new_stop": 309.3500142857143,
+      "logged_at": "2026-07-29T14:46:53.456706+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 309.35,
+      "new_stop": 310.51001428571425,
+      "logged_at": "2026-07-29T14:55:05.960448+00:00"
+    },
+    {
+      "ticker": "NVDA",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 175.57,
+      "new_stop": 176.73144285714284,
+      "logged_at": "2026-07-29T14:55:05.960448+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 310.51,
+      "new_stop": 311.63001428571425,
+      "logged_at": "2026-07-29T15:10:06.773723+00:00"
+    },
+    {
+      "ticker": "NVDA",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 176.73,
+      "new_stop": 177.44144285714285,
+      "logged_at": "2026-07-29T15:10:06.773723+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 311.63,
+      "new_stop": 311.81501428571426,
+      "logged_at": "2026-07-29T16:55:06.339964+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 311.82,
+      "new_stop": 312.81501428571426,
+      "logged_at": "2026-07-29T17:10:06.475333+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 312.82,
+      "new_stop": 313.94001428571426,
+      "logged_at": "2026-07-29T17:25:07.505542+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 313.94,
+      "new_stop": 315.90001428571424,
+      "logged_at": "2026-07-29T18:10:08.222482+00:00"
+    },
+    {
+      "ticker": "NVDA",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 177.44,
+      "new_stop": 178.15644285714285,
+      "logged_at": "2026-07-29T18:10:08.222482+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 315.9,
+      "new_stop": 316.7900142857143,
+      "logged_at": "2026-07-29T18:40:07.542868+00:00"
+    },
+    {
+      "ticker": "NVDA",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 178.16,
+      "new_stop": 178.72144285714285,
+      "logged_at": "2026-07-29T18:40:07.542868+00:00"
+    },
+    {
+      "ticker": "GOOGL",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 316.79,
+      "new_stop": 318.2300142857143,
+      "logged_at": "2026-07-29T18:55:07.159897+00:00"
+    },
+    {
+      "ticker": "NVDA",
+      "account": "default",
+      "status": "raised_stop",
+      "old_stop": 178.72,
+      "new_stop": 180.61644285714286,
+      "logged_at": "2026-07-29T18:55:07.159897+00:00"
+    }
+  ],
+  "watchlist_moves": [
+    {
+      "ticker": "MSFT",
+      "prior_close": 393.35,
+      "last_price": 403.22,
+      "pct_change": 2.5092157111986793
+    },
+    {
+      "ticker": "NFLX",
+      "prior_close": 72.39,
+      "last_price": 73.63,
+      "pct_change": 1.7129437767647395
+    },
+    {
+      "ticker": "GOOGL",
+      "prior_close": 333.71,
+      "last_price": 333.36,
+      "pct_change": -0.1048814839231566
+    },
+    {
+      "ticker": "AAPL",
+      "prior_close": 340.08,
+      "last_price": 338.43,
+      "pct_change": -0.4851799576570152
+    },
+    {
+      "ticker": "SPY",
+      "prior_close": 740.86,
+      "last_price": 728.0,
+      "pct_change": -1.735820532894206
+    },
+    {
+      "ticker": "AMZN",
+      "prior_close": 230.86,
+      "last_price": 226.7,
+      "pct_change": -1.8019578965606968
+    },
+    {
+      "ticker": "QQQ",
+      "prior_close": 675.49,
+      "last_price": 660.85,
+      "pct_change": -2.1673155783209204
+    },
+    {
+      "ticker": "AAL",
+      "prior_close": 15.36,
+      "last_price": 14.83,
+      "pct_change": -3.4505208333333295
+    },
+    {
+      "ticker": "TSLA",
+      "prior_close": 307.44,
+      "last_price": 295.79,
+      "pct_change": -3.7893572729638234
+    },
+    {
+      "ticker": "NVDA",
+      "prior_close": 197.01,
+      "last_price": 189.46,
+      "pct_change": -3.832292777016386
+    },
+    {
+      "ticker": "NU",
+      "prior_close": 14.68,
+      "last_price": 14.03,
+      "pct_change": -4.427792915531337
+    },
+    {
+      "ticker": "INTC",
+      "prior_close": 86.3,
+      "last_price": 81.915,
+      "pct_change": -5.081112398609491
+    },
+    {
+      "ticker": "AMD",
+      "prior_close": 454.62,
+      "last_price": 424.68,
+      "pct_change": -6.585719941929523
+    },
+    {
+      "ticker": "NOK",
+      "prior_close": 8.93,
+      "last_price": 8.32,
+      "pct_change": -6.830907054871214
+    },
+    {
+      "ticker": "META",
+      "prior_close": 593.41,
+      "last_price": 549.09,
+      "pct_change": -7.468697864882618
+    },
+    {
+      "ticker": "SOFI",
+      "prior_close": 16.74,
+      "last_price": 15.14,
+      "pct_change": -9.557945041815998
+    }
+  ],
+  "cycle_run_counts": {
+    "rd_agent_daily_cycle": 1,
+    "sneaky_pivot_cycle": 39,
+    "trailing_stop_cycle": 21
+  },
+  "benchmark": {
+    "default": {
+      "account": "default",
+      "start_date": "2026-07-20",
+      "start_equity": 100000.0,
+      "current_equity": 99721.87,
+      "portfolio_return_pct": -0.27813000000000976,
+      "benchmark_symbol": "SPY",
+      "benchmark_start_price": 742.09,
+      "benchmark_current_price": 728.0,
+      "benchmark_return_pct": -1.8986915333719656,
+      "alpha_pct": 1.6205615333719559
+    },
+    "sneaky_pivot": {
+      "account": "sneaky_pivot",
+      "start_date": "2026-07-28",
+      "start_equity": 100000.0,
+      "current_equity": 100234.0,
+      "portfolio_return_pct": 0.23400000000000087,
+      "benchmark_symbol": "SPY",
+      "benchmark_start_price": 740.86,
+      "benchmark_current_price": 728.0,
+      "benchmark_return_pct": -1.7358205328942056,
+      "alpha_pct": 1.9698205328942064
+    }
+  }
+}

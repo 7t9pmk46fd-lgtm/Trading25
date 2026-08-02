@@ -1,0 +1,215 @@
+{
+  "date": "2026-07-28",
+  "generated_at": "2026-07-29T02:16:43.196927+00:00",
+  "account": {
+    "equity": 100328.32,
+    "today_pnl": -126.1299999999901,
+    "buying_power": 364899.59
+  },
+  "open_positions": [
+    {
+      "symbol": "AMD",
+      "qty": 13.0,
+      "avg_entry_price": 480.308462,
+      "current_price": 450.28,
+      "unrealized_pl": -390.370006
+    },
+    {
+      "symbol": "GOOGL",
+      "qty": 31.0,
+      "avg_entry_price": 319.126774,
+      "current_price": 332.1,
+      "unrealized_pl": 402.170006
+    },
+    {
+      "symbol": "TSLA",
+      "qty": 28.0,
+      "avg_entry_price": 321.01,
+      "current_price": 304.2,
+      "unrealized_pl": -470.68
+    }
+  ],
+  "orders_today": [
+    {
+      "id": 10,
+      "signal_id": 12,
+      "ticker": "NFLX",
+      "side": "sell",
+      "qty": 145.0,
+      "order_type": "market",
+      "alpaca_order_id": "a8ceb696-8899-488c-ab7e-7994bf359cdd",
+      "status": "filled",
+      "is_paper": 1,
+      "submitted_at": "2026-07-28 17:40:12",
+      "filled_at": "2026-07-28 17:40:13.320203+00:00",
+      "fill_price": 73.32,
+      "notes": "",
+      "strategy": "rd_mean_reversion"
+    }
+  ],
+  "signals_today": [
+    {
+      "id": 11,
+      "ticker": "NFLX",
+      "action": "sell",
+      "strategy": "rd_mean_reversion",
+      "qty": null,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "signal=exit_long, zscore=0.27, close=73.40",
+      "status": "rejected",
+      "created_at": "2026-07-28 14:45:04",
+      "updated_at": "2026-07-28 14:45:05",
+      "stop_price": null
+    },
+    {
+      "id": 12,
+      "ticker": "NFLX",
+      "action": "sell",
+      "strategy": "rd_mean_reversion",
+      "qty": 145.0,
+      "weight": null,
+      "confidence": null,
+      "reasoning": "signal=exit_long, zscore=0.21, close=73.20",
+      "status": "executed",
+      "created_at": "2026-07-28 16:30:43",
+      "updated_at": "2026-07-28 17:40:12",
+      "stop_price": null
+    }
+  ],
+  "signal_counts": {
+    "rejected": 1,
+    "executed": 1
+  },
+  "errors": [],
+  "stop_events": [],
+  "watchlist_moves": [
+    {
+      "ticker": "NFLX",
+      "prior_close": 70.4,
+      "last_price": 72.37,
+      "pct_change": 2.798295454545453
+    },
+    {
+      "ticker": "AAL",
+      "prior_close": 14.95,
+      "last_price": 15.36,
+      "pct_change": 2.742474916387961
+    },
+    {
+      "ticker": "GOOGL",
+      "prior_close": 326.56,
+      "last_price": 334.81,
+      "pct_change": 2.5263351298383143
+    },
+    {
+      "ticker": "MSFT",
+      "prior_close": 389.1,
+      "last_price": 393.78,
+      "pct_change": 1.2027756360832562
+    },
+    {
+      "ticker": "AAPL",
+      "prior_close": 336.91,
+      "last_price": 340.17,
+      "pct_change": 0.9676174646047877
+    },
+    {
+      "ticker": "NU",
+      "prior_close": 14.53,
+      "last_price": 14.67,
+      "pct_change": 0.9635237439779806
+    },
+    {
+      "ticker": "NVDA",
+      "prior_close": 196.51,
+      "last_price": 197.55,
+      "pct_change": 0.5292351534273169
+    },
+    {
+      "ticker": "SPY",
+      "prior_close": 739.09,
+      "last_price": 740.67,
+      "pct_change": 0.2137764007089701
+    },
+    {
+      "ticker": "META",
+      "prior_close": 593.87,
+      "last_price": 593.3,
+      "pct_change": -0.0959806018152205
+    },
+    {
+      "ticker": "AMZN",
+      "prior_close": 231.39,
+      "last_price": 230.74,
+      "pct_change": -0.28091101603352664
+    },
+    {
+      "ticker": "TSLA",
+      "prior_close": 309.22,
+      "last_price": 306.81,
+      "pct_change": -0.779380376431028
+    },
+    {
+      "ticker": "QQQ",
+      "prior_close": 682.12,
+      "last_price": 676.15,
+      "pct_change": -0.8752125725678807
+    },
+    {
+      "ticker": "SOFI",
+      "prior_close": 16.88,
+      "last_price": 16.72,
+      "pct_change": -0.9478672985782
+    },
+    {
+      "ticker": "NOK",
+      "prior_close": 9.28,
+      "last_price": 8.9,
+      "pct_change": -4.094827586206886
+    },
+    {
+      "ticker": "INTC",
+      "prior_close": 91.67,
+      "last_price": 86.24,
+      "pct_change": -5.923420966510316
+    },
+    {
+      "ticker": "AMD",
+      "prior_close": 494.95,
+      "last_price": 454.54,
+      "pct_change": -8.164461056672385
+    }
+  ],
+  "cycle_run_counts": {
+    "rd_agent_daily_cycle": 1,
+    "sneaky_pivot_cycle": 32,
+    "trailing_stop_cycle": 3
+  },
+  "benchmark": {
+    "default": {
+      "account": "default",
+      "start_date": "2026-07-20",
+      "start_equity": 100000.0,
+      "current_equity": 100328.32,
+      "portfolio_return_pct": 0.32832000000000416,
+      "benchmark_symbol": "SPY",
+      "benchmark_start_price": 742.09,
+      "benchmark_current_price": 740.67,
+      "benchmark_return_pct": -0.19135145332777048,
+      "alpha_pct": 0.5196714533277746
+    },
+    "sneaky_pivot": {
+      "account": "sneaky_pivot",
+      "start_date": "2026-07-28",
+      "start_equity": 100000.0,
+      "current_equity": 100000.0,
+      "portfolio_return_pct": 0.0,
+      "benchmark_symbol": "SPY",
+      "benchmark_start_price": 740.86,
+      "benchmark_current_price": 740.67,
+      "benchmark_return_pct": -0.025645871014778887,
+      "alpha_pct": 0.025645871014778887
+    }
+  }
+}
