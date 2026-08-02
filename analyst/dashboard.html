@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading Desk</title>
+<style>
+  :root {
+    --surface: #1a1a19; --surface-2: #242423; --surface-3: #2e2e2c;
+    --ink: #ececea; --ink-2: #b8b8b4; --ink-3: #8a8a85;
+    --line: #3a3a38;
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --accent: #6ea8d8;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--surface); color: var(--ink);
+         font: 14px/1.45 "Segoe UI", system-ui, sans-serif; padding: 20px; }
+  h1 { font-size: 18px; font-weight: 600; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink-2);
+       text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+  #meta { color: var(--ink-3); font-size: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+          border-radius: 999px; font-size: 12px; background: var(--surface-3); }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .card { background: var(--surface-2); border: 1px solid var(--line);
+          border-radius: 10px; padding: 14px 16px; }
+  .card.wide { grid-column: 1 / -1; }
+  .tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           margin-bottom: 14px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+          padding: 10px 14px; }
+  .tile .label { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+  .tile .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-size: 11px; color: var(--ink-3); text-transform: uppercase;
+       letter-spacing: .05em; padding: 4px 8px 6px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  .num { text-align: right; }
+  th.num { text-align: right; }
+  .pos { color: var(--good); } .neg { color: var(--critical); }
+  .sev { font-weight: 600; font-size: 12px; }
+  .muted { color: var(--ink-3); }
+  .small { font-size: 12px; color: var(--ink-2); }
+  ul.attention { list-style: none; }
+  ul.attention li { padding: 7px 0; border-bottom: 1px solid var(--line); }
+  ul.attention li:last-child { border-bottom: none; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .empty { color: var(--ink-3); font-style: italic; padding: 6px 0; }
+  #error-banner { display: none; background: var(--surface-3); border: 1px solid var(--critical);
+                  border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trading Desk</h1>
+  <span class="chip" id="market-chip"><span class="dot" style="background:var(--ink-3)"></span>loading…</span>
+  <span class="chip" id="paper-chip"><span class="dot" style="background:var(--good)"></span>PAPER</span>
+  <span id="meta">connecting…</span>
+</header>
+<div id="error-banner"></div>
+<div class="tiles" id="tiles"></div>
+<div class="grid">
+  <div class="card wide" id="card-attention"><h2>⚠ Needs attention</h2><div id="attention"></div></div>
+  <div class="card wide"><h2>Positions &amp; protection</h2><div id="positions"></div></div>
+  <div class="card"><h2>Signals today</h2><div id="signals"></div></div>
+  <div class="card"><h2>Orders today</h2><div id="orders"></div></div>
+  <div class="card"><h2>Corrections &amp; errors</h2><div id="corrections"></div></div>
+  <div class="card"><h2>R&amp;D — nightly verdicts</h2><div id="rd"></div></div>
+  <div class="card"><h2>Improvement proposals (unreviewed)</h2><div id="proposals"></div></div>
+  <div class="card"><h2>Reports</h2><div id="reports"></div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const fmtUsd = v => (v == null) ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtPct = v => (v == null) ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+const signCls = v => v == null ? "" : (v >= 0 ? "pos" : "neg");
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const t = iso => {
+  if (!iso) return "—";
+  let s = String(iso);
+  // SQLite datetime('now') stores naive UTC ("YYYY-MM-DD HH:MM:SS") -- tag it
+  // as UTC so it renders in the viewer's local time like the ISO log stamps do.
+  if (s.includes(" ") && !s.includes("T")) s = s.replace(" ", "T") + "Z";
+  return new Date(s).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+};
+const SEV = { critical: ["var(--critical)", "⛔"], warning: ["var(--warning)", "⚠️"], info: ["var(--accent)", "ℹ️"] };
+
+function table(headers, rows, numCols) {
+  if (!rows.length) return '<div class="empty">nothing to show</div>';
+  const th = headers.map((h,i) => `<th class="${(numCols||[]).includes(i)?"num":""}">${esc(h)}</th>`).join("");
+  const body = rows.map(r => "<tr>" + r.map((c,i) =>
+    `<td class="${(numCols||[]).includes(i)?"num":""}">${c}</td>`).join("") + "</tr>").join("");
+  return `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function render(s) {
+  const clock = s.clock || {};
+  const open = clock.is_open === true;
+  $("market-chip").innerHTML = `<span class="dot" style="background:${open?"var(--good)":"var(--ink-3)"}"></span>` +
+    (open ? `market open · closes ${t(clock.next_close)}` : `market closed · opens ${clock.next_open ? new Date(clock.next_open).toLocaleString([], {weekday:"short", hour:"2-digit", minute:"2-digit"}) : "—"}`);
+  $("meta").textContent = `updated ${t(s.generated_at)} · auto-refresh 15s · read-only`;
+
+  const acc = s.accounts || {};
+  let tiles = "";
+  for (const [name, a] of Object.entries(acc)) {
+    if (a.error) { tiles += `<div class="tile"><div class="label">${esc(name)}</div><div class="value neg">unreachable</div></div>`; continue; }
+    const b = a.benchmark;
+    tiles += `
+      <div class="tile"><div class="label">${esc(name)} equity</div>
+        <div class="value">${fmtUsd(a.equity)}</div>
+        <div class="sub ${signCls(a.today_pnl)}">${a.today_pnl >= 0 ? "▲" : "▼"} ${fmtUsd(a.today_pnl)} today</div></div>
+      <div class="tile"><div class="label">${esc(name)} vs SPY</div>
+        <div class="value ${signCls(b && b.alpha_pct)}">${b ? fmtPct(b.alpha_pct) : "—"}</div>
+        <div class="sub">${b ? `${fmtPct(b.portfolio_return_pct)} vs ${fmtPct(b.benchmark_return_pct)} since ${b.start_date}` : "no baseline"}</div></div>`;
+  }
+  $("tiles").innerHTML = tiles;
+
+  const att = s.attention || [];
+  $("attention").innerHTML = att.length
+    ? `<ul class="attention">` + att.map(i => {
+        const [color, icon] = SEV[i.severity] || SEV.info;
+        return `<li><span class="sev" style="color:${color}">${icon} ${esc(i.severity.toUpperCase())}</span>
+                &nbsp; ${esc(i.what)}<div class="small">${esc(i.why)}</div></li>`;
+      }).join("") + `</ul>`
+    : `<div class="empty">✅ all clear — no anomalies detected</div>`;
+
+  let posRows = [];
+  for (const [name, a] of Object.entries(acc)) {
+    for (const p of (a.positions || [])) {
+      const stop = (a.stops || {})[p.symbol];
+      const prot = stop
+        ? (stop.status === "new" || stop.status === "accepted"
+            ? `<span class="pos">🛡 ${fmtUsd(stop.stop_price)} ${esc(stop.time_in_force.toUpperCase())}</span>`
+            : `<span style="color:var(--warning)">⏳ ${esc(stop.status)}</span>`)
+        : `<span class="neg">⛔ NONE</span>`;
+      posRows.push([esc(p.symbol), esc(name), p.qty, fmtUsd(p.avg_entry_price), fmtUsd(p.current_price),
+        `<span class="${signCls(p.unrealized_pl)}">${fmtUsd(p.unrealized_pl)}</span>`, prot]);
+    }
+  }
+  $("positions").innerHTML = table(["Ticker","Account","Qty","Entry","Now","Unrealized","Stop"], posRows, [2,3,4,5]);
+
+  const dbs = s.db || {};
+  $("signals").innerHTML = table(["Time","Ticker","Action","Strategy","Status"],
+    (dbs.signals_today || []).map(x => [t(x.created_at)+"", esc(x.ticker), esc(x.action), esc(x.strategy), esc(x.status)]));
+  $("orders").innerHTML = table(["Time","Ticker","Side","Qty","Status","Fill"],
+    (dbs.orders_today || []).map(o => [t(o.submitted_at), esc(o.ticker), esc(o.side), o.qty, esc(o.status), o.fill_price ? fmtUsd(o.fill_price) : "—"]), [3]);
+
+  const logs = s.logs || {}, corr = s.corrections || {};
+  let cHtml = "";
+  if ((corr.mistakes || []).length)
+    cHtml += corr.mistakes.map(m => `<div style="padding:5px 0"><b>${esc(m.summary)}</b><div class="small">↳ ${esc(m.corrected_action)}</div></div>`).join("") +
+             `<div class="small muted">from daily review ${esc(corr.narrative_date)}</div>`;
+  const errs = (logs.errors_today || []);
+  if (errs.length)
+    cHtml += `<div style="margin-top:8px">` + table(["Time","Source","Error"],
+      errs.map(e => [t(e.logged_at), esc(e.source), `<span class="small">${esc(String(e.detail).slice(0,140))}</span>`])) + `</div>`;
+  const rej = (dbs.rejected_signals_recent || []);
+  if (rej.length)
+    cHtml += `<div style="margin-top:8px"><div class="small muted">rejected signals (3d)</div>` +
+      table(["Ticker","Action","Why"], rej.slice(0,6).map(r => [esc(r.ticker), esc(r.action), `<span class="small">${esc(String(r.reasoning).slice(0,120))}</span>`])) + `</div>`;
+  $("corrections").innerHTML = cHtml || '<div class="empty">no corrections or errors on record today</div>';
+
+  const nights = (logs.rd_nightly_tail || []);
+  $("rd").innerHTML = (nights.length
+    ? table(["Date","Verdict"], nights.slice().reverse().map(n => [esc(n.date || (n.logged_at||"").slice(0,10)), esc(n.verdict || JSON.stringify(n).slice(0,120))]))
+    : '<div class="empty">no nightly R&D runs yet — first run is tonight 5:30 PM</div>') +
+    `<div class="small muted" style="margin-top:6px">latest backtests: ` +
+    (dbs.backtest_runs || []).slice(0,3).map(b => `${esc(b.strategy)} ${b.total_return != null ? fmtPct(b.total_return*100) : "—"}`).join(" · ") + `</div>`;
+
+  $("proposals").innerHTML = table(["Title","Filed"],
+    (dbs.unreviewed_proposals || []).map(p => [`${esc(p.source_title || p.strategy_summary.slice(0,60))}<div class="small">${esc(String(p.strategy_summary).slice(0,110))}</div>`, t(p.created_at)]));
+
+  $("reports").innerHTML = table(["File","Updated"],
+    (s.reports || []).map(r => [`<a href="/reports/${encodeURIComponent(r.name)}" target="_blank">${esc(r.name)}</a>`, esc(r.modified.replace("T"," "))]));
+}
+
+async function tick() {
+  try {
+    const res = await fetch("/api/state");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    render(await res.json());
+    $("error-banner").style.display = "none";
+  } catch (e) {
+    $("error-banner").textContent = "⛔ Dashboard server unreachable: " + e.message + " — retrying…";
+    $("error-banner").style.display = "block";
+  }
+}
+tick();
+setInterval(tick, 15000);
+</script>
+</body>
+</html>

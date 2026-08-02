@@ -199,6 +199,7 @@ def get_unreconciled_orders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM orders o
         LEFT JOIN signals s ON o.signal_id = s.id
         WHERE o.alpaca_order_id IS NOT NULL AND o.filled_at IS NULL
+          AND o.status NOT IN ('canceled', 'replaced', 'expired', 'rejected')
         """
     ).fetchall()
 
