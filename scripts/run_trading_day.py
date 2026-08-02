@@ -17,6 +17,14 @@ closes handled by the broker, not local weekday math):
     scripts/run_sneaky_pivot_cycle.py's dry-run default requires),
     followed by trail_stops across every account (stop raising +
     DAY->GTC conversion).
+  - ~8 minutes before the close: an explicit end-of-day flatten of any
+    sneaky_pivot-held position. This exists because the screener's own
+    force_flatten_eod can NEVER fire on 15-minute bars: the last session
+    bar is stamped 15:45 ET, which never reaches the >= 15:55 flatten
+    cutoff, and the loop stops cycling at 16:00 -- without this step an
+    intraday position would silently be held overnight, violating the
+    strategy's hard no-overnight rule (latent since the strategy was
+    built; found in the 2026-08-02 review, before its first live entry).
   - After the close: one final reconciliation pass, then exits. The
     scheduled task starts a fresh process next trading morning.
 
@@ -52,6 +60,7 @@ from shared.config import KNOWN_ACCOUNTS
 
 ET = ZoneInfo("America/New_York")
 CYCLE_SECONDS = 15 * 60
+EOD_FLATTEN_SECONDS = 8 * 60      # flatten sneaky_pivot this close to the bell
 SWING_SCAN_WEEKDAYS = (0, 1, 2)   # Mon-Wed, matching the old TradingDeskDailyCycle schedule
 SWING_SCAN_AFTER_ET = (9, 45)     # don't scan on the opening print
 MAX_WAIT_FOR_OPEN_HOURS = 12      # started on a weekend/holiday evening? just exit
@@ -108,6 +117,35 @@ def _trail_all_stops():
     return {account: check_and_trail(dry_run=False, account=account) for account in KNOWN_ACCOUNTS}
 
 
+def _eod_flatten():
+    """Queue a sell for every sneaky_pivot-held position and execute it
+    through the normal risk-gated execution loop (exits are never
+    blocked). See the module docstring for why the screener's own
+    force_flatten_eod cannot be relied on with 15-minute bars."""
+    from run_sneaky_pivot_cycle import get_sneaky_pivot_held_qty
+
+    from shared import db
+    from shared.config import WATCHLIST
+    from execution.run_execution_loop import process_pending_signals
+
+    queued = []
+    with db.db_session() as conn:
+        for ticker in WATCHLIST:
+            held = get_sneaky_pivot_held_qty(conn, ticker)
+            if held > 0:
+                signal_id = db.insert_signal(
+                    conn, ticker=ticker, action="sell", strategy="sneaky_pivot",
+                    qty=held, reasoning="force_flatten_eod (loop EOD guard)",
+                )
+                queued.append({"ticker": ticker, "qty": held, "signal_id": signal_id})
+
+    if not queued:
+        return {"queued": [], "execution": []}
+    execution = process_pending_signals(dry_run=False)
+    reconciliation = reconcile()
+    return {"queued": queued, "execution": execution, "reconciliation": reconciliation}
+
+
 def run_trading_day(once: bool = False) -> None:
     if not ALPACA_PAPER:
         _log("refused_to_start", reason="ALPACA_PAPER is not true. This loop trades with no "
@@ -121,6 +159,7 @@ def run_trading_day(once: bool = False) -> None:
 
     _log("session_start", paper=ALPACA_PAPER, once=once)
     swing_scan_done_for = None  # date the once-a-day swing scan last ran
+    eod_flatten_done = False    # per-process; a fresh process starts each morning
 
     while True:
         clock = _step("clock", alpaca_client.get_market_clock)
@@ -146,6 +185,19 @@ def run_trading_day(once: bool = False) -> None:
             continue
 
         now_et = datetime.now(ET)
+        seconds_to_close = (clock["next_close"] - clock["timestamp"]).total_seconds()
+
+        if seconds_to_close <= EOD_FLATTEN_SECONDS:
+            if not eod_flatten_done:
+                _step("eod_flatten", _eod_flatten)
+                eod_flatten_done = True
+            if once:
+                _log("session_end", reason="--once pass complete")
+                return
+            # Nothing left to do this session but let the close arrive.
+            time_mod.sleep(max(30, seconds_to_close + 60))
+            continue
+
         if (
             swing_scan_done_for != now_et.date()
             and now_et.weekday() in SWING_SCAN_WEEKDAYS
@@ -161,9 +213,10 @@ def run_trading_day(once: bool = False) -> None:
             _log("session_end", reason="--once pass complete")
             return
 
-        # Sleep the remainder of the 15-min slot, but wake for the close.
-        seconds_to_close = (clock["next_close"] - clock["timestamp"]).total_seconds()
-        time_mod.sleep(max(30, min(CYCLE_SECONDS, seconds_to_close + 60)))
+        # Sleep the remainder of the 15-min slot, but never sleep past the
+        # EOD flatten window -- wake exactly when it opens if that's sooner.
+        seconds_to_flatten_window = seconds_to_close - EOD_FLATTEN_SECONDS
+        time_mod.sleep(max(30, min(CYCLE_SECONDS, seconds_to_flatten_window + 10)))
 
 
 if __name__ == "__main__":

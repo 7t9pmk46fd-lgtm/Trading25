@@ -105,16 +105,34 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
                         outcome["stop_price"] = sig["stop_price"]
                     db.update_signal_status(conn, sig["id"], "pending")  # unchanged
                 else:
-                    if sig["action"] == "buy":
-                        order = alpaca_client.submit_market_order_with_stop(
-                            sig["ticker"], qty, sig["stop_price"], account=acct
-                        )
-                    else:
-                        # Clear any standing protective stop before closing
-                        # the position -- otherwise it's left pointing at a
-                        # position that's about to no longer exist.
-                        alpaca_client.cancel_open_orders_for_symbol(sig["ticker"], account=acct)
-                        order = alpaca_client.submit_market_order(sig["ticker"], qty, sig["action"], account=acct)
+                    try:
+                        if sig["action"] == "buy":
+                            order = alpaca_client.submit_market_order_with_stop(
+                                sig["ticker"], qty, sig["stop_price"], account=acct
+                            )
+                        else:
+                            # Clear any standing protective stop before closing
+                            # the position -- otherwise it's left pointing at a
+                            # position that's about to no longer exist.
+                            alpaca_client.cancel_open_orders_for_symbol(sig["ticker"], account=acct)
+                            order = alpaca_client.submit_market_order(sig["ticker"], qty, sig["action"], account=acct)
+                    except Exception as e:
+                        # An Alpaca-side rejection (e.g. shares still held by
+                        # a pending-cancel stop, insufficient buying power)
+                        # must not abort the whole pass: before this except
+                        # existed, the exception unwound past the session's
+                        # commit, every already-processed signal's status
+                        # update was rolled back, and THIS signal stayed
+                        # 'pending' -- primed to re-fire on the next live
+                        # pass. Found for real on 2026-08-02 when a sell was
+                        # rejected against a position whose protective stop
+                        # was still pending_cancel. Mark it rejected and
+                        # move on; nothing was submitted for this signal.
+                        db.update_signal_status(conn, sig["id"], "rejected")
+                        outcome["status"] = "rejected"
+                        outcome["reason"] = f"broker error: {type(e).__name__}: {e}"
+                        results.append(outcome)
+                        continue
                     conn.execute(
                         """INSERT INTO orders
                            (signal_id, ticker, side, qty, alpaca_order_id, status, is_paper, notes)
