@@ -86,6 +86,20 @@ def get_account_snapshot(account: str = "default") -> AccountSnapshot:
     )
 
 
+def get_market_clock(account: str = "default") -> dict:
+    """Alpaca's market clock: authoritative on trading days/hours,
+    including holidays and early closes -- always prefer this over local
+    weekday/time math for any "is the market open" decision."""
+    client = _get_trading_client(account)
+    clock = client.get_clock()
+    return {
+        "is_open": bool(clock.is_open),
+        "timestamp": clock.timestamp,
+        "next_open": clock.next_open,
+        "next_close": clock.next_close,
+    }
+
+
 def get_open_positions(account: str = "default") -> list[dict]:
     client = _get_trading_client(account)
     positions = client.get_all_positions()

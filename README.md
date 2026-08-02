@@ -74,24 +74,52 @@ user level, not in this repo.
   rather than guessing).
 - 🔲 Short support (long-only end to end, deliberately).
 
-## Full autonomous mode
+## Full autonomous mode (2026-08-02: continuous market-hours loop)
 
-Windows Task Scheduler task `TradingDeskDailyCycle` runs
-`scripts/run_cycle.bat` (Mon–Wed 9:45 AM ET): watchlist scan → signal
-queue → live risk-gated execution → fill reconciliation, logged to
-`data/cycle_log.jsonl`. No per-trade human approval — the JSONL logs and
-the daily review PDF are the after-the-fact visibility.
+Windows Task Scheduler task `TradingDeskMarketLoop` starts
+`scripts/run_trading_day.bat` every weekday at 8:20 AM CT (9:20 ET). The
+loop (`scripts/run_trading_day.py`) then covers the whole session with no
+per-trade human approval:
+
+- waits for the open using **Alpaca's market clock** (holidays and early
+  closes handled by the broker, not local weekday math);
+- once per day at/after 9:45 ET, Mon–Wed (preserving the old daily-cycle
+  schedule): swing mean-reversion scan → live execution → reconciliation;
+- every 15 minutes until close: sneaky_pivot intraday cycle (live) +
+  `trail_stops` across both accounts;
+- after close: final reconciliation, then exits until the next morning.
+
+Safety rails enforced in code: **refuses to start unless
+`ALPACA_PAPER=true`** (the no-approval autonomy is scoped to paper
+trading only), an OS-level single-instance lock so a manual run and the
+scheduled task can't double-trade, and per-step exception isolation with
+every step logged to `data/trading_day_log.jsonl`.
 
 ```powershell
-Get-ScheduledTask -TaskName TradingDeskDailyCycle       # check status
-Disable-ScheduledTask -TaskName TradingDeskDailyCycle    # pause
-Unregister-ScheduledTask -TaskName TradingDeskDailyCycle # remove
+Get-ScheduledTask -TaskName TradingDeskMarketLoop       # check status
+Disable-ScheduledTask -TaskName TradingDeskMarketLoop    # pause
+Unregister-ScheduledTask -TaskName TradingDeskMarketLoop # remove
 ```
 
-The sneaky_pivot intraday cycle (`scripts/run_sneaky_pivot_cycle.py`) is
-dry-run by default and only trades with an explicit `--live`; a dry-run
-expires every signal it evaluates so no other live cycle can pick one up
-(a real cross-cycle execution bug, fixed 2026-07-29).
+Manual runs of `scripts/run_sneaky_pivot_cycle.py` remain dry-run by
+default (`--live` required); a dry-run expires every signal it evaluates
+so no other live cycle can pick one up (a real cross-cycle execution
+bug, fixed 2026-07-29). The old one-shot `TradingDeskDailyCycle` task
+was removed in favor of the loop; `scripts/run_cycle.py` is still the
+swing-cycle implementation the loop calls.
+
+Two Claude scheduled tasks (run locally by Claude Code while the app is
+open; a missed run fires on next launch) complete the unattended day:
+
+- **trading-desk-daily-review** (weekdays 3:15 PM CT): runs
+  `analyst/daily_review.py gather`, writes the narrative, builds the PDF
+  in `Reports/`.
+- **trading-desk-weekly-rd** (Saturdays 10 AM CT): re-runs both
+  backtests, mines the week's logs and fills, writes
+  `Reports/weekly_rd_<date>.md`, and files concrete improvement
+  proposals as research notes. **Proposals only — it never edits
+  strategy code or parameters**; promotion still goes through human
+  review (`analyst/review_notes.py`), per design principle 2.
 
 ## Risk rules (enforced in code, not just documented)
 
