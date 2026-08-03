@@ -8,6 +8,38 @@ order. Signals are written to the shared `signals` table and only
 
 ## Strategies
 
+### ⚠ Walk-forward result (2026-08-03) — read before tuning anything
+
+`backtest/walk_forward.py` ran 16 quarterly folds over ~4 years of real
+out-of-sample data (12-month train → 3-month test, rolling). Verdict:
+
+| | Total | Annualized | Sharpe | Max DD |
+|---|---|---|---|---|
+| Walk-forward (re-tuned each fold) | +38.7% | +8.5% | 0.62 | -12.3% |
+| Fixed live params | +49.5% | +10.5% | 0.74 | -14.0% |
+| **SPY buy-and-hold** | **+76.1%** | **+15.4%** | **0.96** | -19.0% |
+
+Three conclusions, all uncomfortable and all load-bearing:
+
+1. **Re-tuning made it worse** (+38.7% vs +49.5% for never touching the
+   parameters). The selection is fitting noise, and acting on it costs
+   ~11 points. **Do not tune this strategy on backtest results.**
+2. **The parameter instability is total**: 10 distinct winners across 16
+   folds, changing in 11 of 15 consecutive folds. And the live set
+   (`lb20/entry-1.5/exit0.0`) was the training winner in **0 of 16**
+   folds — the 2026-07-28 decision that adopted it was in-sample
+   selection on a single window, exactly the artifact this test exists
+   to detect.
+3. **It does not beat its benchmark**, on absolute return or Sharpe, and
+   won only 6 of 16 quarters.
+
+Fair caveats: the test window (2022-08 → 2026-07) was a strong bull
+market, which structurally disadvantages mean reversion; the strategy
+did lose less than SPY in the one down quarter, and carried a smaller
+drawdown throughout; and the simulation pays 0% on cash while flat,
+understating real returns by roughly 2-3%/yr at recent money-market
+rates. None of that closes a 27-point gap.
+
 ### `rd_mean_reversion` — daily z-score mean reversion (live, default account)
 - `screeners/mean_reversion.py` + `generate_and_queue_batch()` in
   `generate_signal.py`. Runs in the scheduled daily cycle

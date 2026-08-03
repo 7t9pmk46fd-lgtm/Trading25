@@ -57,8 +57,16 @@ user level, not in this repo.
 
 ## Status
 
-- ✅ `rd_mean_reversion` (swing) live on the `default` paper account via
-  the scheduled market loop.
+- ⚠️ **`rd_mean_reversion` does not beat its benchmark out of sample.**
+  Walk-forward validation (`signals/backtest/walk_forward.py`, 16
+  quarterly folds over 4 years, 2026-08-03): +49.5% with fixed live
+  params vs **SPY +76.1%**, Sharpe 0.74 vs 0.96. Re-tuning each fold made
+  it *worse* (+38.7%), and the live parameter set was never the training
+  winner in any fold — the tuning it came from was in-sample selection.
+  **Do not tune this strategy on backtest results**; that's the specific
+  thing measured and found to be noise. It remains live on paper as a
+  working pipeline, not as a demonstrated edge.
+- ✅ Live on the `default` paper account via the scheduled market loop.
 - ⛔ `sneaky_pivot` (intraday) **disabled 2026-08-03** and its dedicated
   paper account closed. In its only live session it opened two naked
   shorts (MSFT, NOK) by re-issuing exits against a stale local fill
