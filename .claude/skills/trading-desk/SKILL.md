@@ -10,9 +10,15 @@ An autonomous Alpaca PAPER trading system. Three packages: `signals/`
 ONLY code that places orders), `analyst/` (research ingestion, daily
 review PDF, dashboard), over `shared/` (config, SQLite ledger, risk
 rules, market data). `mcp_server.py` exposes read-only/simulation MCP
-tools. Two Alpaca paper accounts: `default` (swing mean-reversion) and
-`sneaky_pivot` (intraday; `SNEAKY_PIVOT_*` env vars). Credentials in
-gitignored `.env`.
+tools. **One** Alpaca paper account: `default`, running the swing
+mean-reversion strategy. Credentials in gitignored `.env`.
+
+As of 2026-08-03 the `sneaky_pivot` intraday strategy is **disabled**
+(`shared.config.SNEAKY_PIVOT_ENABLED`, default false) and its dedicated
+paper account was **closed by the user** — it opened two naked shorts in
+its only live session and had never backtested positive. Code is retained
+but inert; see `signals/SKILL.md` before ever reviving it. Anything that
+still points at that account will raise `ACCOUNT_CLOSED`.
 
 ## Check first, before touching anything trading-related
 
@@ -44,12 +50,20 @@ gitignored `.env`.
   `analyst/review_notes.py` → user approval → code change → backtest.
 - **Exits are never risk-blocked; every buy needs qty + stop_price**
   (execution rejects otherwise). Don't change these invariants.
+- **The broker's position is the truth about what is held.** Never decide
+  "do I still hold this?" from local fill records — reconcile lags a
+  cycle, and acting on a stale ledger opened two naked shorts on
+  2026-08-03. `run_execution_loop.py` now hard-refuses any sell larger
+  than the real holding; never weaken that guard.
+- **This system is long-only.** It has no code path that closes a short.
+  If one appears, it's a bug — surface it to the user immediately; they
+  must close it manually (Claude never places orders).
 
 ## Automation roster (don't double-run these by hand)
 
 | Task | When | What |
 |---|---|---|
-| `TradingDeskMarketLoop` (Windows) | weekdays 8:20 AM CT | full-session trading loop, 15-min cycles, EOD flatten, paper guard + instance lock |
+| `TradingDeskMarketLoop` (Windows) | weekdays 8:20 AM CT | full-session loop: swing scan once/day (Mon–Wed after 9:45 ET) + trail_stops every 15 min; paper guard + instance lock. Skips a swing scan already logged today, so a mid-session restart is safe |
 | `TradingDeskDashboard` (Windows) | at logon | read-only dashboard :8787 |
 | `TradingDeskICloudMirror` (Windows) | every 15 min | robocopy /MIR to iCloud |
 | `trading-desk-daily-review` (Claude) | weekdays 3:15 PM CT | gather → narrative → PDF in Reports/ |

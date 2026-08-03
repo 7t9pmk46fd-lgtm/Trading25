@@ -5,7 +5,7 @@ agents, deliberately separated by responsibility, over a shared core:
 
 | Package | Role | Can it touch real/paper trades? |
 |---|---|---|
-| `signals/` | Strategy research: screeners, backtests, signal generation (swing `rd_mean_reversion` + intraday `sneaky_pivot`) | No — only queues signals |
+| `signals/` | Strategy research: screeners, backtests, signal generation. Live strategy: swing `rd_mean_reversion`. (`sneaky_pivot` is disabled — see below) | No — only queues signals |
 | `execution/` | Places orders via Alpaca, re-validates every signal against live account state | Yes — the ONLY package that trades |
 | `analyst/` | Ingests news/YouTube into research notes; builds the daily review PDF | No — research output requires human review + a coded, backtested strategy before it can ever influence a trade |
 | `shared/` | Config, SQLite ledger, risk rules, market data client | Risk rules block, don't just warn |
@@ -57,10 +57,17 @@ user level, not in this repo.
 
 ## Status
 
-- ✅ Both strategies live on separate Alpaca paper accounts:
-  `rd_mean_reversion` on the default account (scheduled daily cycle),
-  `sneaky_pivot` on its own account (15-min cycle when scheduled; PDT and
-  circuit-breaker state isolated by design since 2026-07-28).
+- ✅ `rd_mean_reversion` (swing) live on the `default` paper account via
+  the scheduled market loop.
+- ⛔ `sneaky_pivot` (intraday) **disabled 2026-08-03** and its dedicated
+  paper account closed. In its only live session it opened two naked
+  shorts (MSFT, NOK) by re-issuing exits against a stale local fill
+  record, and it had never backtested positive (-0.44%). The oversell bug
+  is fixed system-wide — **`execution/run_execution_loop.py` now refuses
+  any sell larger than the real broker-side holding, for every strategy**
+  — but the strategy stays off pending validation. Code retained, inert;
+  re-enable with `SNEAKY_PIVOT_ENABLED=true` only after reading
+  `signals/SKILL.md` (and creating a new account for it).
 - ✅ Every buy carries a real broker-side stop (2xATR), with
   `execution/trail_stops.py` ratcheting stops up and force-converting
   Alpaca's DAY-TIF OTO stop legs to GTC (a real expiry bug found
@@ -84,9 +91,11 @@ per-trade human approval:
 - waits for the open using **Alpaca's market clock** (holidays and early
   closes handled by the broker, not local weekday math);
 - once per day at/after 9:45 ET, Mon–Wed (preserving the old daily-cycle
-  schedule): swing mean-reversion scan → live execution → reconciliation;
-- every 15 minutes until close: sneaky_pivot intraday cycle (live) +
-  `trail_stops` across both accounts;
+  schedule): swing mean-reversion scan → live execution → reconciliation.
+  A restart mid-session won't repeat it — the loop checks its own log;
+- every 15 minutes until close: `trail_stops` (stop ratcheting + DAY→GTC
+  conversion). The `sneaky_pivot` intraday cycle also ran here until
+  2026-08-03, when that strategy was disabled;
 - after close: final reconciliation, then exits until the next morning.
 
 Safety rails enforced in code: **refuses to start unless

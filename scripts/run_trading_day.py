@@ -12,11 +12,12 @@ closes handled by the broker, not local weekday math):
     mean-reversion cycle (signal scan -> live risk-gated execution ->
     reconciliation). Mon-Wed preserves the schedule the old daily task
     deliberately used.
-  - Every 15 minutes while the market is open: the sneaky_pivot intraday
-    cycle (LIVE -- this loop is the explicit go-live path that
-    scripts/run_sneaky_pivot_cycle.py's dry-run default requires),
-    followed by trail_stops across every account (stop raising +
-    DAY->GTC conversion).
+  - Every 15 minutes while the market is open: trail_stops across every
+    account (stop raising + DAY->GTC conversion). The sneaky_pivot
+    intraday cycle also ran here until 2026-08-03, when the strategy was
+    disabled (shared.config.SNEAKY_PIVOT_ENABLED, default false); the
+    step is skipped entirely while that flag is off, so the swing
+    strategy is currently the only thing generating signals.
   - ~8 minutes before the close: an explicit end-of-day flatten of any
     sneaky_pivot-held position. This exists because the screener's own
     force_flatten_eod can NEVER fire on 15-minute bars: the last session
@@ -52,11 +53,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from shared.config import ALPACA_PAPER
+from shared.config import ALPACA_PAPER, KNOWN_ACCOUNTS, SNEAKY_PIVOT_ENABLED
 from execution import alpaca_client
 from execution.reconcile_orders import reconcile
 from execution.trail_stops import check_and_trail
-from shared.config import KNOWN_ACCOUNTS
 
 ET = ZoneInfo("America/New_York")
 CYCLE_SECONDS = 15 * 60
@@ -141,7 +141,13 @@ def _eod_flatten():
     """Queue a sell for every sneaky_pivot-held position and execute it
     through the normal risk-gated execution loop (exits are never
     blocked). See the module docstring for why the screener's own
-    force_flatten_eod cannot be relied on with 15-minute bars."""
+    force_flatten_eod cannot be relied on with 15-minute bars.
+
+    Runs even while SNEAKY_PIVOT_ENABLED is false, on purpose: disabling a
+    strategy must not orphan the positions it already opened. It's a
+    no-op once that account is flat. Long positions only -- a short
+    (which this system should never hold) is left for a human; the
+    dashboard raises a CRITICAL alert for one."""
     from run_sneaky_pivot_cycle import get_sneaky_pivot_held_qty
 
     from shared import db
@@ -219,7 +225,12 @@ def run_trading_day(once: bool = False) -> None:
 
         if seconds_to_close <= EOD_FLATTEN_SECONDS:
             if not eod_flatten_done:
-                _step("eod_flatten", _eod_flatten)
+                if "sneaky_pivot" in KNOWN_ACCOUNTS:
+                    _step("eod_flatten", _eod_flatten)
+                else:
+                    # The account this flattened was closed 2026-08-03; there
+                    # is nothing left to flatten and querying it would raise.
+                    _log("eod_flatten_skipped", reason="sneaky_pivot account no longer exists")
                 eod_flatten_done = True
             if once:
                 _log("session_end", reason="--once pass complete")
@@ -236,7 +247,8 @@ def run_trading_day(once: bool = False) -> None:
             _step("swing_cycle", _swing_cycle)
             swing_scan_done_for = now_et.date()
 
-        _step("sneaky_pivot_cycle", _sneaky_pivot_cycle)
+        if SNEAKY_PIVOT_ENABLED:
+            _step("sneaky_pivot_cycle", _sneaky_pivot_cycle)
         _step("trail_stops", _trail_all_stops)
 
         if once:

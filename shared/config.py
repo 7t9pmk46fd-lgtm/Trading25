@@ -62,18 +62,45 @@ WATCHLIST = [
 ]
 
 
-KNOWN_ACCOUNTS = ("default", "sneaky_pivot")
+# Accounts this system polls. The 'sneaky_pivot' paper account was CLOSED
+# by the user on 2026-08-03 -- Alpaca now returns ACCOUNT_CLOSED for it,
+# which alpaca-py can't even deserialize. Anything that iterates this tuple
+# (trail_stops, the dashboard, the daily review) would raise every cycle if
+# it were still listed. Back to a single live account.
+KNOWN_ACCOUNTS = ("default",)
 SNEAKY_PIVOT_STRATEGIES = {"sneaky_pivot"}
+
+# Sneaky Pivot is DISABLED (2026-08-03, at the user's direction). In its
+# first and only live session it produced two naked short positions from a
+# stale-fill oversell bug (MSFT -25, NOK -1119) -- the bug itself is fixed
+# in three layers, but the strategy was never validated (backtest: -0.44%,
+# a coded approximation of an explicitly discretionary YouTube method), so
+# it was costing more attention than it was earning.
+#
+# Effect: no new sneaky_pivot entries OR exits are generated, by the cycle
+# or by a manual run. Two things deliberately still run against that
+# account: trail_stops (account-level protection of anything still held)
+# and the loop's end-of-day flatten (so positions the strategy already
+# opened get closed rather than orphaned).
+#
+# To re-enable: set SNEAKY_PIVOT_ENABLED=true in .env. Do NOT re-enable
+# without first backtesting it and confirming the oversell guards hold --
+# see signals/SKILL.md.
+SNEAKY_PIVOT_ENABLED = os.environ.get("SNEAKY_PIVOT_ENABLED", "false").lower() == "true"
 
 
 def account_for_strategy(strategy: str | None) -> str:
     """Single source of truth for which Alpaca account a strategy's orders
-    route through. Added 2026-07-28 when Sneaky Pivot moved to its own
-    paper account (PA3OEVR40VTX) to isolate its PDT day-trade counter and
-    daily circuit breaker from rd-agent's swing positions -- a bad
-    intraday day trading Sneaky Pivot shouldn't be able to block a
-    legitimate rd-agent entry, and vice versa."""
-    return "sneaky_pivot" if strategy in SNEAKY_PIVOT_STRATEGIES else "default"
+    route through.
+
+    Everything routes to 'default' again as of 2026-08-03: Sneaky Pivot
+    got its own paper account on 2026-07-28 to isolate its intraday PDT
+    count and circuit breaker from the swing strategy's, but that account
+    has since been closed and the strategy disabled. Routing anything to
+    the dead account would produce an unreconcilable order. The mapping
+    stays as a function (rather than being inlined) so a future strategy
+    can be given its own account without touching every call site."""
+    return "default"
 
 
 def require_alpaca_credentials() -> None:

@@ -24,7 +24,30 @@ order. Signals are written to the shared `signals` table and only
   ~90-day lookback window, the strategy may never generate its exit —
   the broker-side 2xATR stop is what bounds that risk.
 
-### `sneaky_pivot` — intraday support/resistance breakout (live, own account)
+### `sneaky_pivot` — DISABLED 2026-08-03 (code retained, inert)
+
+**Do not re-enable without reading this.** Killed after exactly one live
+session. Two failures, one fatal:
+
+1. **It opened two naked shorts** (MSFT -25, NOK -1119) in a long-only
+   system, by re-issuing an exit against a stale local fill record. The
+   underlying oversell bug is fixed in three layers (see below), but it
+   only surfaced because this strategy exits on a 15-minute cadence.
+2. **It was never validated.** Its own backtest returned -0.44%; it is a
+   fixed-rule translation of a method its source presenter calls
+   discretionary.
+
+Disabled via `shared.config.SNEAKY_PIVOT_ENABLED` (default false), which
+short-circuits `scripts/run_sneaky_pivot_cycle.py::run_cycle` — covering
+the scheduled loop AND any manual `--live` run — and makes the loop skip
+the step entirely. **Its dedicated paper account was closed by the user
+the same day**, so re-enabling needs a new account plus new
+`SNEAKY_PIVOT_*` credentials, and `KNOWN_ACCOUNTS` / `account_for_strategy`
+would have to be pointed back at it.
+
+Original description follows, for whoever revisits it:
+
+### `sneaky_pivot` — intraday support/resistance breakout
 - `screeners/sneaky_pivot.py` + `generate_and_queue_sneaky_pivot_signal()`.
   Cycle entry point: `scripts/run_sneaky_pivot_cycle.py` (dry-run by
   default; `--live` to submit).
@@ -65,6 +88,17 @@ order. Signals are written to the shared `signals` table and only
   signals `pending`, where a separately scheduled always-live cycle could
   (and did) execute one. Dry-run cycles now expire what they evaluate —
   see `scripts/run_sneaky_pivot_cycle.py`.
+- **Oversell → naked short (2026-08-03, twice)**: `reconcile()` runs at
+  the END of a cycle, so an order submitted seconds earlier is still
+  `accepted`, not `filled` — its fill lands one cycle late. The next
+  cycle read its own stale ledger, believed the position was still open,
+  and sold again, opening a short with no stop and no code path that
+  would ever close it. **The broker's position is authoritative; never
+  decide "do I hold this?" from local fill records alone.** Fixed at
+  three layers: the cycle takes `min(ledger, broker position)`, the EOD
+  flatten does the same, and — most importantly —
+  `run_execution_loop.py` now refuses ANY sell exceeding the real
+  holding, for every strategy present or future.
 
 ## Removed in the restructure
 `intraday_mean_reversion` (the original day-trading strategy) was deleted

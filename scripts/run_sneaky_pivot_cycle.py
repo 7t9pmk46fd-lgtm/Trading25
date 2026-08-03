@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from shared import db
-from shared.config import WATCHLIST
+from shared.config import WATCHLIST, SNEAKY_PIVOT_ENABLED
 from shared.market_data import get_daily_bars_cached, get_intraday_bars
 from execution import alpaca_client
 from signals.generate_signal import generate_and_queue_sneaky_pivot_signal
@@ -72,6 +72,15 @@ def get_sneaky_pivot_held_qty(conn, ticker: str) -> float:
 
 
 def run_cycle(dry_run: bool = True) -> dict:
+    if not SNEAKY_PIVOT_ENABLED:
+        # Single choke point: covers the scheduled loop AND any manual run.
+        # See shared/config.py::SNEAKY_PIVOT_ENABLED for why and how to
+        # re-enable. No signals are generated, so nothing can reach
+        # execution from this strategy at all.
+        return {"status": "disabled",
+                "note": "SNEAKY_PIVOT_ENABLED is false -- no signals generated. "
+                        "Set SNEAKY_PIVOT_ENABLED=true in .env to re-enable."}
+
     now_et = datetime.now(ET)
     session_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
     day_start_et = datetime.combine(now_et.date(), time(0, 0), tzinfo=ET)
