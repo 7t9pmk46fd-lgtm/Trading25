@@ -123,7 +123,17 @@ def run_cycle(dry_run: bool = True) -> dict:
                     signal_results.append(outcome)
                     continue
 
-                held_qty = sneaky_qty if sneaky_qty > 0 else None
+                # Bound the strategy's own ledger by what the BROKER says we
+                # actually hold. The local ledger lags: reconcile() runs at the
+                # END of a cycle, and an order submitted a second earlier is
+                # still 'accepted', not 'filled' -- so its fill isn't recorded
+                # until the NEXT cycle's reconcile. That made the next cycle
+                # believe the position was still open and re-issue the exit,
+                # selling shares we no longer had and opening a naked SHORT in
+                # a long-only system. Happened twice on 2026-08-03 (MSFT -25,
+                # NOK -1119). real_qty comes straight from Alpaca and is
+                # instant, so min() of the two can never exceed reality.
+                held_qty = min(sneaky_qty, real_qty) if (sneaky_qty > 0 and real_qty > 0) else None
 
                 signal_id = generate_and_queue_sneaky_pivot_signal(
                     ticker=ticker,

@@ -226,6 +226,16 @@ def _attention(state: dict) -> list[dict]:
                 continue
             stops = acct.get("stops", {})
             for pos in acct.get("positions", []):
+                if pos["qty"] < 0:
+                    # This system is long-only end to end: a short can only be
+                    # a bug (2026-08-03: MSFT -25 and NOK -1119 from a stale
+                    # local fill record re-issuing an exit). Nothing here will
+                    # close it -- the EOD flatten only acts on long positions --
+                    # and a short's loss is unbounded. Human action required.
+                    items.append({"severity": "critical",
+                                  "what": f"{pos['symbol']} ({name}): SHORT {pos['qty']} shares — this system is long-only",
+                                  "why": "Nothing in the desk will close a short: the EOD flatten only handles long positions, and no stop is placed on one. Close it manually in Alpaca."})
+                    continue
                 stop = stops.get(pos["symbol"])
                 if stop is None:
                     items.append({"severity": "critical",

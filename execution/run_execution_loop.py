@@ -45,11 +45,19 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
     from rd-agent's.
     """
     account_cache: dict[str, alpaca_client.AccountSnapshot] = {}
+    position_cache: dict[str, dict[str, float]] = {}
 
     def _account(name: str) -> alpaca_client.AccountSnapshot:
         if name not in account_cache:
             account_cache[name] = alpaca_client.get_account_snapshot(account=name)
         return account_cache[name]
+
+    def _held(name: str, ticker: str) -> float:
+        """Real broker-side quantity held, per account. NOT cached across
+        submissions within a pass -- each sell changes it."""
+        positions = {p["symbol"]: p["qty"] for p in alpaca_client.get_open_positions(account=name)}
+        position_cache[name] = positions
+        return positions.get(ticker, 0.0)
 
     results = []
 
@@ -97,6 +105,29 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
                         f"buy without a real protective stop. Every buy must carry "
                         f"a broker-side stop, not just a sizing assumption."
                     )
+
+                if sig["action"] == "sell":
+                    # NEVER sell more than the broker says we hold. This system
+                    # is long-only end to end: a sell exists only to close an
+                    # existing position, so an oversized sell can only ever be
+                    # a bug -- and it silently opens a naked short with no stop
+                    # and unbounded loss. Two happened on 2026-08-03 (MSFT,
+                    # NOK) from a strategy re-issuing an exit against a stale
+                    # local fill record. This is the last line of defense and
+                    # it covers EVERY strategy, not just the one that broke.
+                    held = _held(acct, sig["ticker"])
+                    if held <= 0:
+                        raise risk.RiskViolation(
+                            f"Signal #{sig['id']}: refusing to sell {sig['ticker']} -- "
+                            f"account '{acct}' holds {held} shares. A sell with no "
+                            f"position would open a short; this system is long-only."
+                        )
+                    if qty > held:
+                        raise risk.RiskViolation(
+                            f"Signal #{sig['id']}: refusing to sell {qty} {sig['ticker']} -- "
+                            f"account '{acct}' only holds {held}. Selling the excess "
+                            f"would open a short; this system is long-only."
+                        )
 
                 if dry_run:
                     outcome["status"] = "dry_run_would_execute"

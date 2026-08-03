@@ -92,6 +92,26 @@ def _acquire_single_instance_lock():
     return handle  # keep a reference alive; closing it releases the lock
 
 
+def _swing_scan_already_ran_today():
+    """Returns today's ET date if a successful swing cycle is already in
+    today's log, else None. Log stamps are UTC; during market hours the UTC
+    and ET dates agree, which is the only window this is consulted in."""
+    if not LOG_PATH.exists():
+        return None
+    today_et = datetime.now(ET).date()
+    for line in LOG_PATH.read_text().splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("event") != "swing_cycle" or entry.get("status") != "ok":
+            continue
+        stamp = str(entry.get("logged_at", ""))[:10]
+        if stamp == today_et.isoformat():
+            return today_et
+    return None
+
+
 def _step(name: str, fn):
     """Run one loop step, exception-isolated, logged either way."""
     try:
@@ -128,10 +148,15 @@ def _eod_flatten():
     from shared.config import WATCHLIST
     from execution.run_execution_loop import process_pending_signals
 
+    # Bound by the broker's real position, same reason as the cycle itself:
+    # the local ledger can lag a fill by a cycle, and flattening against a
+    # stale number would sell shares we don't have (i.e. open a short).
+    real = {p["symbol"]: p["qty"] for p in alpaca_client.get_open_positions(account="sneaky_pivot")}
+
     queued = []
     with db.db_session() as conn:
         for ticker in WATCHLIST:
-            held = get_sneaky_pivot_held_qty(conn, ticker)
+            held = min(get_sneaky_pivot_held_qty(conn, ticker), real.get(ticker, 0.0))
             if held > 0:
                 signal_id = db.insert_signal(
                     conn, ticker=ticker, action="sell", strategy="sneaky_pivot",
@@ -158,7 +183,12 @@ def run_trading_day(once: bool = False) -> None:
         sys.exit(1)
 
     _log("session_start", paper=ALPACA_PAPER, once=once)
-    swing_scan_done_for = None  # date the once-a-day swing scan last ran
+    # Survive a mid-session restart (crash, or a redeploy like the 2026-08-03
+    # oversell fix) without re-running the once-a-day swing scan: the log is
+    # the source of truth for whether it already ran today, not process state.
+    swing_scan_done_for = _swing_scan_already_ran_today()
+    if swing_scan_done_for:
+        _log("swing_cycle_skipped", reason="already ran today per log", date=str(swing_scan_done_for))
     eod_flatten_done = False    # per-process; a fresh process starts each morning
 
     while True:
