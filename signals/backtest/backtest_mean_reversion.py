@@ -39,11 +39,11 @@ sys.path.insert(0, str(ROOT))
 
 from shared.market_data import get_daily_bars
 from signals.screeners.mean_reversion import MeanReversionParams, generate_signals
-from shared.config import WATCHLIST
+from shared.config import TRADE_UNIVERSE as WATCHLIST
 from shared.db import db_session, init_db, insert_backtest_run
 
 LOOKBACK_YEARS = 2
-TRADE_UNIVERSE = [t for t in WATCHLIST if t not in ("SPY", "QQQ")]  # SPY/QQQ are the benchmark + a broad index, not mean-reversion candidates
+TRADE_UNIVERSE = list(WATCHLIST)  # shared.config.TRADE_UNIVERSE already excludes benchmarks
 
 VARIANTS = {
     "current_default": MeanReversionParams(lookback=20, entry_z=-2.0, exit_z=0.0),

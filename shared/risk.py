@@ -63,7 +63,19 @@ class RiskLimits:
     is_pdt_account: bool = False        # True if equity >= $25,000 (PDT rule doesn't apply)
     max_day_trades_per_5_days: int = 3  # FINRA PDT limit for non-PDT accounts
     daily_loss_limit_pct: float = 0.025  # 2.5% -- circuit breaker trips here
-    max_position_pct: float = 0.10       # 10% of equity, max per single position
+    max_position_pct: float = 0.05       # 5% of equity, max per single position.
+                                          # Halved from 10% on 2026-08-03 when the
+                                          # watchlist went from 16 to ~57 names: at a
+                                          # 10% cap the account could only ever hold
+                                          # ~10 positions, so a wider universe would
+                                          # not have produced a wider portfolio. At 5%
+                                          # up to 20 can be held concurrently. Note the
+                                          # aggregate-risk trade-off: 20 positions each
+                                          # risking target_risk_per_trade_pct to their
+                                          # stop is 20% of equity at risk if everything
+                                          # stops out together (correlated selloff),
+                                          # versus 10% before. Lower
+                                          # target_risk_per_trade_pct if that is too hot.
     target_risk_per_trade_pct: float = 0.01  # 1% -- used for stop-loss-aware sizing
 
 

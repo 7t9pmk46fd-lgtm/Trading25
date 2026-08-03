@@ -54,12 +54,57 @@ DB_PATH = os.environ.get(
     "TRADING_DESK_DB_PATH", str(PROJECT_ROOT / "data" / "trading.db")
 )
 
-_DEFAULT_WATCHLIST = "AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AMD,NFLX,SPY,QQQ"
+# Expanded 2026-08-03 from 16 names (heavily mega-cap tech) to a
+# sector-diversified set of liquid large caps, so the strategy has more
+# independent opportunities and less single-sector concentration. All are
+# high-volume names, which also matters for short-side borrow availability.
+_DEFAULT_WATCHLIST = ",".join([
+    # Tech & semis
+    "AAPL", "MSFT", "NVDA", "AMD", "INTC", "AVGO", "QCOM", "TXN", "ORCL", "CRM", "ADBE", "CSCO",
+    # Internet & media
+    "AMZN", "GOOGL", "META", "NFLX", "DIS", "CMCSA",
+    # Consumer discretionary
+    "TSLA", "HD", "MCD", "NKE", "SBUX", "LOW",
+    # Consumer staples
+    "PG", "KO", "PEP", "COST", "WMT",
+    # Financials
+    "JPM", "BAC", "GS", "MS", "WFC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "PFE", "ABBV", "MRK", "LLY", "TMO",
+    # Energy
+    "XOM", "CVX", "COP",
+    # Industrials
+    "CAT", "BA", "GE", "HON", "UPS",
+    # Telecom
+    "T", "VZ",
+    # Higher-beta / speculative (carried over from the original list)
+    "NOK", "AAL", "NU", "SOFI",
+    # Benchmarks / broad ETFs -- MONITORED, NEVER TRADED (see BENCHMARK_SYMBOLS)
+    "SPY", "QQQ",
+])
 WATCHLIST = [
     t.strip().upper()
     for t in os.environ.get("TRADING_DESK_WATCHLIST", _DEFAULT_WATCHLIST).split(",")
     if t.strip()
 ]
+
+# Broad-market ETFs are watched (dashboard, daily review, benchmarking) but
+# never traded by a single-name mean-reversion strategy. Every backtest has
+# always excluded them; the LIVE cycle was scanning the raw WATCHLIST and so
+# could trade them -- a live/backtest mismatch, fixed 2026-08-03 by routing
+# signal generation through TRADE_UNIVERSE instead.
+BENCHMARK_SYMBOLS = ("SPY", "QQQ")
+TRADE_UNIVERSE = [t for t in WATCHLIST if t not in BENCHMARK_SYMBOLS]
+
+# Hard ceiling on concurrent open positions. Necessary as of the 2026-08-03
+# universe expansion: with 16 tickers and a 10% position cap the portfolio
+# was implicitly bounded at ~10 names, but 57 tickers at a 5% cap means a
+# single broad selloff could push the z-score of dozens of names below the
+# entry threshold on the SAME day -- the daily cycle would then try to open
+# them all at once and commit the whole account in one cycle. Nothing else
+# in the pipeline limits total exposure, so this is the limit.
+# 20 x 5% = 100% of equity, i.e. fully invested at the ceiling.
+MAX_CONCURRENT_POSITIONS = int(os.environ.get("TRADING_DESK_MAX_POSITIONS", "20"))
 
 
 # Accounts this system polls. The 'sneaky_pivot' paper account was CLOSED

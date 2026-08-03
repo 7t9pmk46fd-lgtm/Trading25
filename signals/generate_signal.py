@@ -24,6 +24,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shared import db, risk
+from shared.config import MAX_CONCURRENT_POSITIONS
 from shared.risk import RiskLimits, compute_position_size, compute_atr
 from shared.market_data import get_daily_bars
 from signals.screeners.mean_reversion import generate_signals, latest_signal, MeanReversionParams
@@ -78,10 +79,20 @@ def generate_and_queue_batch(tickers: list[str]) -> list[dict]:
             _cache["held_qty"] = {p["symbol"]: p["qty"] for p in alpaca_client.get_open_positions()}
         return _cache["held_qty"]
 
+    # Portfolio-level ceiling. Counts real exposure (held positions plus
+    # unfilled buy orders) and everything queued earlier in THIS batch --
+    # otherwise a single cycle could queue 50 buys that only collectively
+    # blow the limit once they all execute. Exits are never limited.
+    queued_buys = {"n": 0}
+
+    def _capacity_left() -> int:
+        return MAX_CONCURRENT_POSITIONS - len(_held_positions()) - queued_buys["n"]
+
     results = []
     for ticker in tickers:
         try:
-            results.append(_screen_one(ticker, all_bars, _account, _held_positions, _held_qty))
+            results.append(_screen_one(ticker, all_bars, _account, _held_positions, _held_qty,
+                                       _capacity_left, queued_buys))
         except Exception as e:
             # A bug in one ticker (e.g. the unrecognized-signal guard
             # tripping) must not cost the rest of an unattended batch its
@@ -93,7 +104,8 @@ def generate_and_queue_batch(tickers: list[str]) -> list[dict]:
     return results
 
 
-def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty) -> dict:
+def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
+                capacity_left=None, queued_buys=None) -> dict:
     if ticker not in all_bars or all_bars[ticker].empty:
         return {"ticker": ticker, "status": "no_data"}
 
@@ -125,6 +137,12 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty)
         # Alpaca's real positions, only executing one does.
         if ticker in get_held_positions():
             return {"ticker": ticker, "status": "skipped_already_holding"}
+
+        # Portfolio ceiling -- checked before any sizing work, and only for
+        # entries. An exit must never be blocked by a position limit.
+        if capacity_left is not None and capacity_left() <= 0:
+            return {"ticker": ticker, "status": "skipped_position_limit",
+                    "limit": MAX_CONCURRENT_POSITIONS}
 
         entry_price = sig["close"]
         atr = compute_atr(all_bars[ticker])
@@ -162,6 +180,9 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty)
             qty=qty, stop_price=stop_price if action == "buy" else None,
             confidence=None, reasoning=reasoning,
         )
+
+    if action == "buy" and queued_buys is not None:
+        queued_buys["n"] += 1
 
     return {"ticker": ticker, "status": "queued", "signal_id": signal_id, "action": action, "qty": qty,
             "stop_price": stop_price if action == "buy" else None}

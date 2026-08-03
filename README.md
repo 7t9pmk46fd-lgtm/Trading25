@@ -84,10 +84,21 @@ user level, not in this repo.
   (`signals/backtest/`, results in the `backtest_runs` table).
 - ✅ Daily PDF review (`analyst/daily_review.py`): P&L, positions,
   orders, stop activity, watchlist moves, benchmark, mistakes log.
+- ✅ Universe expanded 2026-08-03: 16 → **57 tradeable names**, sector
+  diversified (was almost entirely mega-cap tech). Position cap halved to
+  5% so a wider universe produces a wider portfolio, with a hard ceiling
+  of `MAX_CONCURRENT_POSITIONS` (20 = 100% of equity) — without it, one
+  broad selloff could signal dozens of entries in a single cycle and
+  commit the whole account at once. SPY/QQQ are now watched-but-never-
+  traded (`BENCHMARK_SYMBOLS`), fixing a live/backtest mismatch where the
+  live cycle could trade them but every backtest excluded them.
+- ⛔ **Short selling: tested and rejected** 2026-08-03
+  (`signals/backtest/short_side_test.py`). The short sleeve returned
+  **-22.4%** over 5 years (Sharpe -0.77) and cost 29 points when added to
+  the long side. Loses at every entry threshold tested. Long-only stands.
 - 🔲 Portfolio-level backtesting (multi-ticker capital allocation).
 - 🔲 Weight-based signal sizing (execution rejects weight-only signals
   rather than guessing).
-- 🔲 Short support (long-only end to end, deliberately).
 
 ## Full autonomous mode (2026-08-02: continuous market-hours loop)
 

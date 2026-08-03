@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from shared.config import WATCHLIST, PROJECT_ROOT
+from shared.config import TRADE_UNIVERSE, WATCHLIST, PROJECT_ROOT
 
 LOG_PATH = Path(PROJECT_ROOT) / "data" / "cycle_log.jsonl"
 
@@ -41,7 +41,7 @@ def run_cycle() -> dict:
 
     started_at = datetime.now(timezone.utc).isoformat()
     try:
-        signal_results = generate_and_queue_batch(WATCHLIST)
+        signal_results = generate_and_queue_batch(TRADE_UNIVERSE)
     except Exception as e:
         # One bad ticker no longer aborts the batch fetch (get_daily_bars
         # already skips missing symbols internally) -- this only catches a
@@ -65,7 +65,7 @@ def run_cycle() -> dict:
 
     return {
         "started_at": started_at,
-        "watchlist": WATCHLIST,
+        "watchlist": TRADE_UNIVERSE,
         "signals": signal_results,
         "execution": execution_results,
         "execution_error": execution_error,

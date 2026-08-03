@@ -146,11 +146,13 @@ def run_screener(strategy: str = "mean_reversion", symbols: list[str] | None = N
     (intraday levels). symbols defaults to the configured watchlist."""
     import pandas as pd
 
-    from shared.config import WATCHLIST
+    from shared.config import TRADE_UNIVERSE
     from shared.market_data import get_daily_bars
     from shared.risk import compute_atr
 
-    tickers = [t.upper() for t in (symbols or WATCHLIST)]
+    # TRADE_UNIVERSE, not WATCHLIST: SPY/QQQ are monitored but never traded,
+    # so screening them would report signals the live system won't act on.
+    tickers = [t.upper() for t in (symbols or TRADE_UNIVERSE)]
     end = datetime.now()
 
     if strategy == "mean_reversion":
@@ -282,10 +284,10 @@ def backtest(strategy: str = "mean_reversion", symbols: list[str] | None = None,
     import numpy as np
     import pandas as pd
 
-    from shared.config import WATCHLIST
+    from shared.config import TRADE_UNIVERSE
     from shared.market_data import get_daily_bars
 
-    tickers = [t.upper() for t in (symbols or [t for t in WATCHLIST if t not in ("SPY", "QQQ")])]
+    tickers = [t.upper() for t in (symbols or TRADE_UNIVERSE)]
     end = datetime.now()
     start = end - timedelta(days=lookback_days)
 

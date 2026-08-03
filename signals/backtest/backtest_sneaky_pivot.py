@@ -35,13 +35,13 @@ sys.path.insert(0, str(ROOT))
 
 from shared.market_data import get_daily_bars, get_intraday_bars
 from signals.screeners.sneaky_pivot import SneakyPivotParams, compute_levels, evaluate_today
-from shared.config import WATCHLIST
+from shared.config import TRADE_UNIVERSE as WATCHLIST
 from shared.db import db_session, init_db, insert_backtest_run
 from shared.risk import compute_atr
 
 ET = ZoneInfo("America/New_York")
 CALENDAR_DAYS = 90  # ~60 trading days
-TRADE_UNIVERSE = [t for t in WATCHLIST if t not in ("SPY", "QQQ")]
+TRADE_UNIVERSE = list(WATCHLIST)  # shared.config.TRADE_UNIVERSE already excludes benchmarks
 PARAMS = SneakyPivotParams()  # current production defaults -- no variants tested here,
                               # the source strategy is too specific/discretionary to
                               # justify grid-searching invented parameter sets

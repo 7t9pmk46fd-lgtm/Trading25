@@ -8,6 +8,38 @@ order. Signals are written to the shared `signals` table and only
 
 ## Strategies
 
+### ⚠ Short selling was tested and REJECTED (2026-08-03)
+
+`backtest/short_side_test.py`. The screener has always supported shorts
+symmetrically (`allow_short`, default False) — entering short when
+z >= |entry_z|. Over 5 years and 57 tickers, with everything else held
+identical:
+
+| | Total | Annualized | Sharpe | Max DD |
+|---|---|---|---|---|
+| Long-only (production) | +32.4% | +5.8% | 0.62 | -9.8% |
+| Long/short | +3.4% | +0.7% | 0.12 | -16.0% |
+| **Short sleeve alone** | **-22.4%** | **-5.0%** | **-0.77** | -28.6% |
+
+Adding shorts cost 29 points of return and half the Sharpe, while
+holding short exposure 38% of all ticker-days. It is **not** an artifact
+of one threshold — the short sleeve loses at every entry level tested
+(z≥1.0 −23.2%, z≥1.5 −22.4%, z≥2.0 −16.9%, z≥2.5 −7.2%, z≥3.0 −0.7%),
+with negative Sharpe throughout; the loss only shrinks toward zero
+because the trade count does. And in 2022, the one down year in the
+sample and the regime shorts exist for, the sleeve returned just +3.3%
+while long-only lost only −3.7% anyway.
+
+Mechanically this makes sense: shorting a name because it is 1.5σ above
+its 20-day mean is shorting strength, and strength persisted for most of
+this sample. **Do not enable `allow_short` on mean reversion.** A
+different short thesis (trend/momentum-based, or regime-gated) is not
+what was tested and is not ruled out — but it would need its own
+strategy, its own walk-forward, and execution-side work that does not
+exist: `alpaca_client` is buy-side only, protective stops assume a stop
+*below* entry, and `run_execution_loop`'s oversell guard deliberately
+blocks any sell beyond what is held.
+
 ### ⚠ Walk-forward result (2026-08-03) — read before tuning anything
 
 `backtest/walk_forward.py` ran 16 quarterly folds over ~4 years of real

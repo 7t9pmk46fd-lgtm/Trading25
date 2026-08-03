@@ -48,13 +48,13 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from shared.config import WATCHLIST
+from shared.config import TRADE_UNIVERSE as WATCHLIST
 from shared.db import db_session, init_db, insert_backtest_run
 from shared.market_data import get_daily_bars
 from signals.backtest.backtest_mean_reversion import simulate_ticker
 from signals.screeners.mean_reversion import MeanReversionParams
 
-TRADE_UNIVERSE = [t for t in WATCHLIST if t not in ("SPY", "QQQ")]
+TRADE_UNIVERSE = list(WATCHLIST)  # shared.config.TRADE_UNIVERSE already excludes benchmarks
 WARMUP_DAYS = 90          # calendar days of history before a window, so the
                           # rolling z-score is warm on the window's first bar
 LIVE_PARAMS = MeanReversionParams()   # whatever production is running today
