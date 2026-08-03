@@ -39,7 +39,6 @@ HTML_PATH = Path(__file__).resolve().parent / "dashboard.html"
 LOG_FILES = {
     "market_loop": ROOT / "data" / "trading_day_log.jsonl",
     "swing_cycle": ROOT / "data" / "cycle_log.jsonl",
-    "sneaky_pivot_cycle": ROOT / "data" / "sneaky_pivot_log.jsonl",
     "trail_stops": ROOT / "data" / "trail_stop_log.jsonl",
     "rd_nightly": ROOT / "data" / "rd_nightly_log.jsonl",
 }

@@ -74,9 +74,9 @@ def get_daily_bars_cached(
     hitting the API every call.
 
     Added 2026-07-27: daily bars only change once a trading day completes,
-    but trail_stops.py and run_sneaky_pivot_cycle.py both re-fetch 40-70
-    days of daily history every 15-minute cycle purely to compute
-    ATR/levels -- up to 4x/hour of identical, redundant network calls.
+    but a 15-minute cycle re-fetches 40-70 days of daily history every
+    pass purely to compute ATR -- up to 4x/hour of identical, redundant
+    network calls.
     Each cron fire is a fresh Python process, so a module-level/in-memory
     cache wouldn't survive between calls -- this has to be a real file.
 

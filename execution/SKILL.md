@@ -17,31 +17,22 @@ This only reads data — no orders placed. Confirms your keys work and
 pulls real Alpaca account info + sample historical data before you trust
 anything else.
 
-## Multi-account (added 2026-07-28)
-This is no longer a single-account system. `alpaca_client.py`'s functions
-all take an `account: str = "default"` param; `shared.config.KNOWN_ACCOUNTS`
-lists every account, and `shared.config.account_for_strategy(strategy)` is
-the single source of truth for which account a given strategy's signals
-route through. Currently: `sneaky_pivot` strategy -> its own account (env
-vars `SNEAKY_PIVOT_ALPACA_API_KEY`/`SNEAKY_PIVOT_ALPACA_SECRET_KEY`),
-everything else -> the original `default` account. Done to isolate Sneaky
-Pivot's intraday PDT day-trade count and daily circuit breaker from
-the mean-reversion strategy (signals/)'s swing positions, so one bad intraday day can't block the
-other's legitimate entries.
+## Accounts
 
-`run_execution_loop.py` fetches/caches an account snapshot (and therefore
-risk limits) per account, keyed off each pending signal's strategy — not
-once globally like before. `trail_stops.py` now loops over every account
-in `KNOWN_ACCOUNTS` in a single invocation. `reconcile_orders.py` looks up
-each unreconciled order's strategy (joined from `signals`) to know which
-account to query — an Alpaca order id is only valid against the account it
-was actually submitted to.
+`alpaca_client.py`'s functions all take an `account: str = "default"`
+param, `shared.config.KNOWN_ACCOUNTS` lists every live account, and
+`shared.config.account_for_strategy(strategy)` decides which account a
+strategy's signals route through. One account today, so everything maps
+to `default`; the plumbing stays so a future strategy can be isolated on
+its own account (separate PDT day-trade count and circuit breaker)
+without touching every call site.
 
-Trade-off: the old "don't double-buy a ticker another strategy already
-holds" guard relied on both strategies seeing the same real Alpaca
-position state. With separate accounts that visibility is gone — nothing
-stops both strategies independently holding the same ticker. Accepted
-deliberately in exchange for the blast-radius isolation above.
+A second account existed 2026-07-28 → 2026-08-03 for an intraday
+strategy that has since been removed. Worth keeping in mind if one is
+ever added again: **positions in separate accounts are invisible to each
+other**, so nothing stops two strategies independently holding the same
+ticker, and an Alpaca order id is only valid against the account it was
+submitted to (`reconcile_orders.py` resolves that per order).
 
 ## Running the execution loop
 ```bash
@@ -52,8 +43,8 @@ Always run dry-run first and read the output. `--live` still only hits
 paper trading unless you've explicitly set `ALPACA_PAPER=false`.
 
 ## Risk checks — defense in depth
-Every signal is re-checked here, even signals from the sneaky_pivot strategy (signals/) that
-were already checked at creation time:
+Every signal is re-checked here, even ones a strategy already checked at
+creation time:
 - Alpaca's own `daytrade_count` and `pattern_day_trader` flag are treated
   as authoritative (Alpaca sees all account activity, not just what this
   system generates).
@@ -147,10 +138,15 @@ trusting the live path.
 `scripts/reconcile_orders.py` polls Alpaca for every local order that
 isn't marked filled yet and writes status/filled_at/fill_price back to the
 `orders` table. Confirmed working 2026-07-20 against a real filled NFLX
-order. As of 2026-07-27, called automatically as part of both
-`scripts/run_cycle.py` and
-`scripts/run_sneaky_pivot_cycle.py` — no longer purely
-manual, though still nothing runs it standalone on its own schedule.
+order. Called automatically at the end of `scripts/run_cycle.py` and once
+more by the market loop after the close — no longer purely manual, though
+nothing runs it standalone on its own schedule.
+
+**Timing trap worth knowing** (it caused two naked shorts on 2026-08-03):
+reconcile runs at the END of a cycle, and an order submitted seconds
+earlier is usually still `accepted`, not `filled` — so its fill is not
+recorded locally until the NEXT cycle. Never treat the local ledger as
+the truth about what is currently held; ask the broker.
 
 ## Trailing stops (2026-07-27)
 `scripts/trail_stops.py` — runs independently of any strategy, on every
@@ -191,8 +187,7 @@ further until the chain clears.
   Treat the current version as a first pass, not a finished system —
   exercise it carefully in dry-run and paper mode, and watch actual
   Alpaca dashboard behavior closely before increasing size or trust.
-- Daily bars used for ATR (both here and in the mean-reversion strategy (signals/)/the sneaky_pivot strategy (signals/)
-  signal generation) are cached on disk once per calendar day via
-  `alpaca_data.get_daily_bars_cached` — added 2026-07-27 to stop
-  trail_stops.py and the sneaky_pivot cycle from re-fetching 40-70 days
-  of identical daily history every 15-minute cycle.
+- Daily bars used for ATR (here and in signal generation) are cached on
+  disk once per calendar day via `shared.market_data.get_daily_bars_cached`
+  — added 2026-07-27 to stop a 15-minute cycle from re-fetching 40-70
+  days of identical daily history every pass.

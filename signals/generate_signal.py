@@ -1,16 +1,13 @@
 """
-Signal generation for both strategies: fetch real bars, run a screener,
-and queue actionable signals to the shared `signals` table.
+Signal generation: fetch real bars, run the screener, and queue
+actionable signals to the shared `signals` table. Nothing here places an
+order -- execution/run_execution_loop.py is the only thing that does.
 
-Two strategies live here (merged from the old rd-agent and
-day-trading-agent during the 2026-08-02 restructure):
-
-  - rd_mean_reversion (swing/daily): NOT risk-gated at generation time --
-    per shared/risk.py and the execution agent's defense-in-depth design,
-    these get their first risk check at execution time.
-  - sneaky_pivot (intraday): MUST pass PDT + circuit-breaker checks before
-    being written at all -- a day-trading signal that violates PDT should
-    never even reach the queue, not be caught later.
+One strategy today: rd_mean_reversion (swing/daily). Its signals are NOT
+risk-gated at generation time; per shared/risk.py and the execution
+agent's defense-in-depth design they get their first risk check at
+execution time, against live account state rather than stale state from
+whenever the signal was written.
 
 Usage:
     python signals/generate_signal.py TICKER
@@ -23,12 +20,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from shared import db, risk
+from shared import db
 from shared.config import MAX_CONCURRENT_POSITIONS
 from shared.risk import RiskLimits, compute_position_size, compute_atr
 from shared.market_data import get_daily_bars
 from signals.screeners.mean_reversion import generate_signals, latest_signal, MeanReversionParams
-from signals.screeners.sneaky_pivot import compute_levels, evaluate_today, SneakyPivotParams
 
 KNOWN_SIGNALS = {"enter_long", "exit_long", "enter_short", "exit_short"}
 
@@ -191,89 +187,6 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
 def generate_and_queue(ticker: str) -> dict:
     """Single-ticker convenience wrapper around generate_and_queue_batch."""
     return generate_and_queue_batch([ticker])[0]
-
-
-def generate_and_queue_sneaky_pivot_signal(
-    ticker: str,
-    daily_bars: pd.DataFrame,
-    intraday_bars_today: pd.DataFrame,
-    session_close,
-    account_equity: float,
-    is_pdt_account: bool,
-    current_daily_pnl: float,
-    held_qty: float | None,
-    params: SneakyPivotParams = SneakyPivotParams(),
-) -> int | None:
-    """
-    Sneaky Pivot strategy (see screeners/sneaky_pivot.py for the full
-    ruleset and caveats -- it's a coded approximation of a discretionary
-    YouTube strategy, added 2026-07-27).
-
-    held_qty: current real position size in this ticker (None/0 if flat).
-    Exit signals here carry a real qty (the held amount) rather than
-    leaving it None -- run_execution_loop rejects ANY signal with
-    qty=None, entry or exit, so an exit signal without a real qty would
-    silently never execute.
-
-    Returns the new signal id, or None if no actionable signal / blocked.
-    Raises risk.RiskViolation if a risk rule blocks an attempted entry.
-    """
-    limits = risk.RiskLimits(account_equity=account_equity, is_pdt_account=is_pdt_account)
-
-    levels = compute_levels(daily_bars, params)
-    if levels is None:
-        return None
-
-    atr = risk.compute_atr(daily_bars)
-    if pd.isna(atr):
-        return None
-
-    has_open_position = bool(held_qty and held_qty > 0)
-    outcome = evaluate_today(
-        intraday_bars_today, levels, atr, session_close, has_open_position, params
-    )
-    signal = outcome["signal"]
-    if signal is None:
-        return None
-
-    SNEAKY_KNOWN_SIGNALS = {"enter_long", "exit_long", "force_flatten_eod"}
-    if signal not in SNEAKY_KNOWN_SIGNALS:
-        raise ValueError(
-            f"Unrecognized signal value {signal!r} for {ticker} -- refusing "
-            f"to guess buy/sell. This should never happen; treat it as a bug."
-        )
-
-    with db.db_session() as conn:
-        if signal == "enter_long":
-            risk.check_pdt_allows_trade(conn, limits)
-            risk.check_circuit_breaker(conn, limits, current_daily_pnl)
-
-            entry_price = outcome["entry_price"]
-            stop_price = outcome["stop_price"]
-            sizing = risk.compute_position_size(limits, entry_price, stop_price)
-            qty = sizing["qty"]
-            if qty <= 0:
-                return None
-            action = "buy"
-        else:
-            # Exits (including force_flatten_eod) are never risk-gated --
-            # closing a position must always be allowed through.
-            action = "sell"
-            qty = held_qty
-            stop_price = None
-
-        signal_id = db.insert_signal(
-            conn,
-            ticker=ticker,
-            action=action,
-            strategy="sneaky_pivot",
-            qty=qty,
-            stop_price=stop_price,
-            confidence=None,
-            reasoning=outcome.get("reasoning", signal),
-        )
-
-    return signal_id
 
 
 def main():

@@ -13,21 +13,18 @@ closes handled by the broker, not local weekday math):
     reconciliation). Mon-Wed preserves the schedule the old daily task
     deliberately used.
   - Every 15 minutes while the market is open: trail_stops across every
-    account (stop raising + DAY->GTC conversion). The sneaky_pivot
-    intraday cycle also ran here until 2026-08-03, when the strategy was
-    disabled (shared.config.SNEAKY_PIVOT_ENABLED, default false); the
-    step is skipped entirely while that flag is off, so the swing
-    strategy is currently the only thing generating signals.
-  - ~8 minutes before the close: an explicit end-of-day flatten of any
-    sneaky_pivot-held position. This exists because the screener's own
-    force_flatten_eod can NEVER fire on 15-minute bars: the last session
-    bar is stamped 15:45 ET, which never reaches the >= 15:55 flatten
-    cutoff, and the loop stops cycling at 16:00 -- without this step an
-    intraday position would silently be held overnight, violating the
-    strategy's hard no-overnight rule (latent since the strategy was
-    built; found in the 2026-08-02 review, before its first live entry).
+    account (stop raising + DAY->GTC conversion).
   - After the close: one final reconciliation pass, then exits. The
     scheduled task starts a fresh process next trading morning.
+
+There is no end-of-day flatten step: the only strategy running is a
+swing strategy that holds positions across sessions by design. An
+intraday strategy added later would need one -- and note the trap that
+made it necessary before, since it is a property of 15-minute bars and
+not of any particular strategy: a screener's own force_flatten_eod
+cannot fire if its cutoff falls after the last bar of the session (the
+final 15-minute bar is stamped 15:45 ET, so a >= 15:55 cutoff is never
+reached) and the loop stops cycling at the close.
 
 Safety rails, enforced in code:
   - REFUSES to start unless ALPACA_PAPER=true -- this loop is the
@@ -53,14 +50,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from shared.config import ALPACA_PAPER, KNOWN_ACCOUNTS, SNEAKY_PIVOT_ENABLED
+from shared.config import ALPACA_PAPER, KNOWN_ACCOUNTS
 from execution import alpaca_client
 from execution.reconcile_orders import reconcile
 from execution.trail_stops import check_and_trail
 
 ET = ZoneInfo("America/New_York")
 CYCLE_SECONDS = 15 * 60
-EOD_FLATTEN_SECONDS = 8 * 60      # flatten sneaky_pivot this close to the bell
 SWING_SCAN_WEEKDAYS = (0, 1, 2)   # Mon-Wed, matching the old TradingDeskDailyCycle schedule
 SWING_SCAN_AFTER_ET = (9, 45)     # don't scan on the opening print
 MAX_WAIT_FOR_OPEN_HOURS = 12      # started on a weekend/holiday evening? just exit
@@ -128,53 +124,8 @@ def _swing_cycle():
     return swing_run_cycle()  # generate + live execute + reconcile, returns summary
 
 
-def _sneaky_pivot_cycle():
-    from run_sneaky_pivot_cycle import run_cycle as sneaky_run_cycle
-    return sneaky_run_cycle(dry_run=False)
-
-
 def _trail_all_stops():
     return {account: check_and_trail(dry_run=False, account=account) for account in KNOWN_ACCOUNTS}
-
-
-def _eod_flatten():
-    """Queue a sell for every sneaky_pivot-held position and execute it
-    through the normal risk-gated execution loop (exits are never
-    blocked). See the module docstring for why the screener's own
-    force_flatten_eod cannot be relied on with 15-minute bars.
-
-    Runs even while SNEAKY_PIVOT_ENABLED is false, on purpose: disabling a
-    strategy must not orphan the positions it already opened. It's a
-    no-op once that account is flat. Long positions only -- a short
-    (which this system should never hold) is left for a human; the
-    dashboard raises a CRITICAL alert for one."""
-    from run_sneaky_pivot_cycle import get_sneaky_pivot_held_qty
-
-    from shared import db
-    from shared.config import WATCHLIST
-    from execution.run_execution_loop import process_pending_signals
-
-    # Bound by the broker's real position, same reason as the cycle itself:
-    # the local ledger can lag a fill by a cycle, and flattening against a
-    # stale number would sell shares we don't have (i.e. open a short).
-    real = {p["symbol"]: p["qty"] for p in alpaca_client.get_open_positions(account="sneaky_pivot")}
-
-    queued = []
-    with db.db_session() as conn:
-        for ticker in WATCHLIST:
-            held = min(get_sneaky_pivot_held_qty(conn, ticker), real.get(ticker, 0.0))
-            if held > 0:
-                signal_id = db.insert_signal(
-                    conn, ticker=ticker, action="sell", strategy="sneaky_pivot",
-                    qty=held, reasoning="force_flatten_eod (loop EOD guard)",
-                )
-                queued.append({"ticker": ticker, "qty": held, "signal_id": signal_id})
-
-    if not queued:
-        return {"queued": [], "execution": []}
-    execution = process_pending_signals(dry_run=False)
-    reconciliation = reconcile()
-    return {"queued": queued, "execution": execution, "reconciliation": reconciliation}
 
 
 def run_trading_day(once: bool = False) -> None:
@@ -195,7 +146,6 @@ def run_trading_day(once: bool = False) -> None:
     swing_scan_done_for = _swing_scan_already_ran_today()
     if swing_scan_done_for:
         _log("swing_cycle_skipped", reason="already ran today per log", date=str(swing_scan_done_for))
-    eod_flatten_done = False    # per-process; a fresh process starts each morning
 
     while True:
         clock = _step("clock", alpaca_client.get_market_clock)
@@ -223,22 +173,6 @@ def run_trading_day(once: bool = False) -> None:
         now_et = datetime.now(ET)
         seconds_to_close = (clock["next_close"] - clock["timestamp"]).total_seconds()
 
-        if seconds_to_close <= EOD_FLATTEN_SECONDS:
-            if not eod_flatten_done:
-                if "sneaky_pivot" in KNOWN_ACCOUNTS:
-                    _step("eod_flatten", _eod_flatten)
-                else:
-                    # The account this flattened was closed 2026-08-03; there
-                    # is nothing left to flatten and querying it would raise.
-                    _log("eod_flatten_skipped", reason="sneaky_pivot account no longer exists")
-                eod_flatten_done = True
-            if once:
-                _log("session_end", reason="--once pass complete")
-                return
-            # Nothing left to do this session but let the close arrive.
-            time_mod.sleep(max(30, seconds_to_close + 60))
-            continue
-
         if (
             swing_scan_done_for != now_et.date()
             and now_et.weekday() in SWING_SCAN_WEEKDAYS
@@ -247,8 +181,6 @@ def run_trading_day(once: bool = False) -> None:
             _step("swing_cycle", _swing_cycle)
             swing_scan_done_for = now_et.date()
 
-        if SNEAKY_PIVOT_ENABLED:
-            _step("sneaky_pivot_cycle", _sneaky_pivot_cycle)
         _step("trail_stops", _trail_all_stops)
 
         if once:
@@ -256,9 +188,9 @@ def run_trading_day(once: bool = False) -> None:
             return
 
         # Sleep the remainder of the 15-min slot, but never sleep past the
-        # EOD flatten window -- wake exactly when it opens if that's sooner.
-        seconds_to_flatten_window = seconds_to_close - EOD_FLATTEN_SECONDS
-        time_mod.sleep(max(30, min(CYCLE_SECONDS, seconds_to_flatten_window + 10)))
+        # close -- the next wake should land on the closed-market branch,
+        # which does the final reconcile and ends the session.
+        time_mod.sleep(max(30, min(CYCLE_SECONDS, seconds_to_close + 60)))
 
 
 if __name__ == "__main__":

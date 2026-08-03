@@ -14,14 +14,12 @@ from dataclasses import dataclass
 
 from shared.config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_PAPER, require_alpaca_credentials
 
-# Env var prefix per account -- "default" reads ALPACA_API_KEY/SECRET_KEY
-# (via shared.config, unchanged), any other account reads
-# {PREFIX}ALPACA_API_KEY/SECRET_KEY. Added 2026-07-28 for Sneaky Pivot's
-# own paper account, isolating its PDT/circuit-breaker state from
-# rd-agent's -- see shared.config.account_for_strategy.
-_ACCOUNT_ENV_PREFIXES = {
-    "sneaky_pivot": "SNEAKY_PIVOT_",
-}
+# Env var prefix per non-default account -- "default" reads
+# ALPACA_API_KEY/SECRET_KEY via shared.config; any other account reads
+# {PREFIX}ALPACA_API_KEY / {PREFIX}ALPACA_SECRET_KEY. Empty today (single
+# account). To give a future strategy its own isolated account, add an
+# entry here and route it in shared.config.account_for_strategy.
+_ACCOUNT_ENV_PREFIXES: dict[str, str] = {}
 
 
 def _credentials_for(account: str) -> tuple[str, str]:

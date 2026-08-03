@@ -5,7 +5,7 @@ agents, deliberately separated by responsibility, over a shared core:
 
 | Package | Role | Can it touch real/paper trades? |
 |---|---|---|
-| `signals/` | Strategy research: screeners, backtests, signal generation. Live strategy: swing `rd_mean_reversion`. (`sneaky_pivot` is disabled — see below) | No — only queues signals |
+| `signals/` | Strategy research: screeners, backtests, signal generation. Live strategy: swing `rd_mean_reversion` | No — only queues signals |
 | `execution/` | Places orders via Alpaca, re-validates every signal against live account state | Yes — the ONLY package that trades |
 | `analyst/` | Ingests news/YouTube into research notes; builds the daily review PDF | No — research output requires human review + a coded, backtested strategy before it can ever influence a trade |
 | `shared/` | Config, SQLite ledger, risk rules, market data client | Risk rules block, don't just warn |
@@ -22,14 +22,15 @@ history has the full story.
 ```
 shared/        config.py, db.py (SQLite ledger), risk.py (PDT/circuit-breaker/sizing),
                market_data.py (Alpaca bars + cache), benchmark.py (vs SPY)
-signals/       screeners/ (mean_reversion, sneaky_pivot), backtest/ (engine + real-data
-               backtests), generate_signal.py (queues signals for both strategies)
+signals/       screeners/ (mean_reversion), backtest/ (engine, real-data backtests,
+               walk_forward, short_side_test), generate_signal.py (queues signals)
 execution/     alpaca_client.py (the only order-placing module), run_execution_loop.py,
                trail_stops.py, reconcile_orders.py, smoke_test.py
 analyst/       ingest/ (news, youtube), extract.py (Claude), ingest_source.py,
                review_notes.py, daily_review.py (PDF report)
-scripts/       run_cycle.py (+ .bat, scheduled daily), run_sneaky_pivot_cycle.py,
-               seed_account_baselines.py
+scripts/       run_trading_day.py (+ .bat, the market-hours loop), run_cycle.py
+               (the swing cycle it calls), seed_account_baselines.py,
+               mirror_to_icloud.bat, run_dashboard.bat
 mcp_server.py  MCP server (stdio); .mcp.json registers it for Claude Code
 ```
 
@@ -67,35 +68,12 @@ user level, not in this repo.
   thing measured and found to be noise. It remains live on paper as a
   working pipeline, not as a demonstrated edge.
 - ✅ Live on the `default` paper account via the scheduled market loop.
-- ⛔ `sneaky_pivot` (intraday) **disabled 2026-08-03** and its dedicated
-  paper account closed. In its only live session it opened two naked
-  shorts (MSFT, NOK) by re-issuing exits against a stale local fill
-  record, and it had never backtested positive (-0.44%). The oversell bug
-  is fixed system-wide — **`execution/run_execution_loop.py` now refuses
-  any sell larger than the real broker-side holding, for every strategy**
-  — but the strategy stays off pending validation. Code retained, inert;
-  re-enable with `SNEAKY_PIVOT_ENABLED=true` only after reading
-  `signals/SKILL.md` (and creating a new account for it).
-- ✅ Every buy carries a real broker-side stop (2xATR), with
-  `execution/trail_stops.py` ratcheting stops up and force-converting
-  Alpaca's DAY-TIF OTO stop legs to GTC (a real expiry bug found
-  2026-07-27 — see `execution/SKILL.md`).
-- ✅ Backtested against real data with SPY benchmark comparison
-  (`signals/backtest/`, results in the `backtest_runs` table).
-- ✅ Daily PDF review (`analyst/daily_review.py`): P&L, positions,
-  orders, stop activity, watchlist moves, benchmark, mistakes log.
-- ✅ Universe expanded 2026-08-03: 16 → **57 tradeable names**, sector
-  diversified (was almost entirely mega-cap tech). Position cap halved to
-  5% so a wider universe produces a wider portfolio, with a hard ceiling
-  of `MAX_CONCURRENT_POSITIONS` (20 = 100% of equity) — without it, one
-  broad selloff could signal dozens of entries in a single cycle and
-  commit the whole account at once. SPY/QQQ are now watched-but-never-
-  traded (`BENCHMARK_SYMBOLS`), fixing a live/backtest mismatch where the
-  live cycle could trade them but every backtest excluded them.
-- ⛔ **Short selling: tested and rejected** 2026-08-03
-  (`signals/backtest/short_side_test.py`). The short sleeve returned
-  **-22.4%** over 5 years (Sharpe -0.77) and cost 29 points when added to
-  the long side. Loses at every entry threshold tested. Long-only stands.
+- 🗑️ An intraday strategy (`sneaky_pivot`) ran 2026-07-27 → 2026-08-03 and
+  was **removed entirely**: never validated (-0.44% backtest), and it
+  opened two naked shorts in its only live session via a stale-fill
+  oversell bug. Recoverable from git (see `signals/SKILL.md`); the
+  system-wide guard it prompted — **the execution loop refuses any sell
+  exceeding the real broker-side holding** — is permanent.
 - 🔲 Portfolio-level backtesting (multi-ticker capital allocation).
 - 🔲 Weight-based signal sizing (execution rejects weight-only signals
   rather than guessing).
@@ -113,8 +91,7 @@ per-trade human approval:
   schedule): swing mean-reversion scan → live execution → reconciliation.
   A restart mid-session won't repeat it — the loop checks its own log;
 - every 15 minutes until close: `trail_stops` (stop ratcheting + DAY→GTC
-  conversion). The `sneaky_pivot` intraday cycle also ran here until
-  2026-08-03, when that strategy was disabled;
+  conversion);
 - after close: final reconciliation, then exits until the next morning.
 
 Safety rails enforced in code: **refuses to start unless
@@ -129,12 +106,10 @@ Disable-ScheduledTask -TaskName TradingDeskMarketLoop    # pause
 Unregister-ScheduledTask -TaskName TradingDeskMarketLoop # remove
 ```
 
-Manual runs of `scripts/run_sneaky_pivot_cycle.py` remain dry-run by
-default (`--live` required); a dry-run expires every signal it evaluates
-so no other live cycle can pick one up (a real cross-cycle execution
-bug, fixed 2026-07-29). The old one-shot `TradingDeskDailyCycle` task
-was removed in favor of the loop; `scripts/run_cycle.py` is still the
-swing-cycle implementation the loop calls.
+The old one-shot `TradingDeskDailyCycle` task was removed in favor of the
+loop; `scripts/run_cycle.py` is still the swing-cycle implementation the
+loop calls. There is no end-of-day flatten step — the only live strategy
+holds across sessions by design.
 
 Two Claude scheduled tasks (run locally by Claude Code while the app is
 open; a missed run fires on next launch) complete the unattended day:
@@ -142,8 +117,12 @@ open; a missed run fires on next launch) complete the unattended day:
 - **trading-desk-daily-review** (weekdays 3:15 PM CT): runs
   `analyst/daily_review.py gather`, writes the narrative, builds the PDF
   in `Reports/`.
-- **trading-desk-weekly-rd** (Saturdays 10 AM CT): re-runs both
-  backtests, mines the week's logs and fills, writes
+- **trading-desk-nightly-rd** (weekdays 5:30 PM CT): operational health
+  check — loop uptime, unprotected positions, stuck signals. **Barred
+  from proposing parameter changes**; walk-forward showed that inference
+  is noise.
+- **trading-desk-weekly-rd** (Saturdays 10 AM CT): synthesises the week,
+  mines the logs and fills, writes
   `Reports/weekly_rd_<date>.md`, and files concrete improvement
   proposals as research notes. **Proposals only — it never edits
   strategy code or parameters**; promotion still goes through human
@@ -157,7 +136,8 @@ open; a missed run fires on next launch) complete the unattended day:
 - **Daily circuit breaker**: new entries blocked once today's P&L hits
   -2.5% of equity. Exits are NEVER blocked by any risk rule.
 - **Sizing**: positions sized so a full stop-out risks ~1% of equity,
-  capped at 10% of equity per position.
+  capped at 5% of equity per position, with a hard ceiling of 20
+  concurrent positions (`MAX_CONCURRENT_POSITIONS`).
 - **Every buy needs a real stop**: signals without `stop_price` (or
   without `qty`) are rejected at execution, never guessed.
 - A stop bounds losses, it doesn't eliminate them — an overnight gap can
@@ -177,8 +157,8 @@ python execution/smoke_test.py   # read-only connectivity check — run this fir
 
 Credentials come from `A:\trading-desk\.env` (gitignored), loaded by
 `shared/config.py` for scheduled/unattended runs. `ALPACA_PAPER=true` is
-the default; the sneaky_pivot account uses `SNEAKY_PIVOT_ALPACA_API_KEY`
-/ `SNEAKY_PIVOT_ALPACA_SECRET_KEY`.
+the default. One Alpaca account (`default`); the per-account plumbing is
+retained so a future strategy can be isolated on its own.
 
 ## Design principles
 

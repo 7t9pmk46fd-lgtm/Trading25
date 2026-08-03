@@ -173,9 +173,9 @@ def check_and_trail(dry_run: bool = False, account: str = "default") -> list[dic
 def main():
     dry_run = "--dry-run" in sys.argv
     # Runs against every known account in one invocation (rather than
-    # needing a separate cron per account) so Sneaky Pivot's positions get
-    # the same stop-raising/DAY-to-GTC protection as rd-agent's, once it
-    # starts trading live in its own account (added 2026-07-28).
+    # needing a separate cron per account) so a strategy running on its own
+    # isolated account still gets the same stop-raising and DAY-to-GTC
+    # protection as everything else.
     results_by_account = {
         account: check_and_trail(dry_run=dry_run, account=account)
         for account in KNOWN_ACCOUNTS

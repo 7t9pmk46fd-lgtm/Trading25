@@ -72,10 +72,11 @@ drawdown throughout; and the simulation pays 0% on cash while flat,
 understating real returns by roughly 2-3%/yr at recent money-market
 rates. None of that closes a 27-point gap.
 
-### `rd_mean_reversion` — daily z-score mean reversion (live, default account)
+### `rd_mean_reversion` — daily z-score mean reversion (the only live strategy)
 - `screeners/mean_reversion.py` + `generate_and_queue_batch()` in
   `generate_signal.py`. Runs in the scheduled daily cycle
-  (`scripts/run_cycle.py`, Windows task `TradingDeskDailyCycle`).
+  (`scripts/run_cycle.py`, driven by the market loop in
+  `scripts/run_trading_day.py`).
 - NOT risk-gated at generation time — first risk check happens at
   execution time (defense-in-depth; see `execution/SKILL.md`).
 - Params tuned 2026-07-28 from the first real 2-year backtest: entry_z
@@ -88,54 +89,44 @@ rates. None of that closes a 27-point gap.
   ~90-day lookback window, the strategy may never generate its exit —
   the broker-side 2xATR stop is what bounds that risk.
 
-### `sneaky_pivot` — DISABLED 2026-08-03 (code retained, inert)
+### Removed strategy: `sneaky_pivot` (deleted 2026-08-03)
 
-**Do not re-enable without reading this.** Killed after exactly one live
-session. Two failures, one fatal:
+An intraday support/resistance breakout strategy lived here from
+2026-07-27 to 2026-08-03. It has been **deleted from the working tree**
+at the user's direction -- the desk no longer follows that strategy or
+format. It is fully recoverable from git if it is ever wanted as a
+starting point for a future strategy:
 
-1. **It opened two naked shorts** (MSFT -25, NOK -1119) in a long-only
-   system, by re-issuing an exit against a stale local fill record. The
-   underlying oversell bug is fixed in three layers (see below), but it
-   only surfaced because this strategy exits on a 15-minute cadence.
-2. **It was never validated.** Its own backtest returned -0.44%; it is a
-   fixed-rule translation of a method its source presenter calls
-   discretionary.
+```bash
+git show 036d8ce:signals/screeners/sneaky_pivot.py
+git show 036d8ce:signals/backtest/backtest_sneaky_pivot.py
+git show 036d8ce:scripts/run_sneaky_pivot_cycle.py
+```
 
-Disabled via `shared.config.SNEAKY_PIVOT_ENABLED` (default false), which
-short-circuits `scripts/run_sneaky_pivot_cycle.py::run_cycle` — covering
-the scheduled loop AND any manual `--live` run — and makes the loop skip
-the step entirely. **Its dedicated paper account was closed by the user
-the same day**, so re-enabling needs a new account plus new
-`SNEAKY_PIVOT_*` credentials, and `KNOWN_ACCOUNTS` / `account_for_strategy`
-would have to be pointed back at it.
+Why it was dropped, so the mistakes aren't repeated:
 
-Original description follows, for whoever revisits it:
+- **Never validated.** It backtested at -0.44% and was a fixed-rule
+  translation of a method its source presenter described as
+  discretionary. It went live on "the logic looks reasonable."
+- **It opened two naked shorts** in its only live session (MSFT -25,
+  NOK -1119) by re-issuing exits against a stale local fill record.
 
-### `sneaky_pivot` — intraday support/resistance breakout
-- `screeners/sneaky_pivot.py` + `generate_and_queue_sneaky_pivot_signal()`.
-  Cycle entry point: `scripts/run_sneaky_pivot_cycle.py` (dry-run by
-  default; `--live` to submit).
-- A fixed-rule translation of an explicitly discretionary YouTube
-  strategy (2026-07-27) — treat results skeptically; the source material
-  itself warns against mechanical use. Long-only (execution has no short
-  support).
-- Risk-gated at generation time: PDT + circuit-breaker checks run before
-  a signal is even written. Exits are never blocked.
-- Runs against its own Alpaca paper account (`SNEAKY_PIVOT_*` env vars)
-  since 2026-07-28, isolating its PDT count and circuit breaker from the
-  swing account.
-- Hard rules: EOD force-flatten 5 min before close; no new entries within
-  30 min of close; only the most recently completed bar can trigger an
-  entry (a real stale-signal bug was caught here — a full-history rescan
-  once resurrected an already-invalidated breakout).
+Both failures are now guarded system-wide, independent of any strategy:
+the execution loop refuses any sell exceeding the real broker-side
+holding, and the walk-forward result above documents why backtest-based
+tuning is not evidence. **Any future intraday strategy inherits two traps
+this one found:** a screener's own end-of-day flatten cannot fire if its
+cutoff falls after the session's last bar (the final 15-minute bar is
+stamped 15:45 ET, so a 15:55 cutoff never triggers), and a dry-run that
+leaves signals `pending` can be picked up later by a different live pass.
 
 ## Backtests (`backtest/`)
 - `engine.py` — simple single-asset engine (equity curve, Sharpe, max DD).
 - `backtest_mean_reversion.py` — 2y real-data variant comparison vs SPY;
   results logged to `backtest_runs`.
-- `backtest_sneaky_pivot.py` — bar-by-bar replay using the actual
-  production `compute_levels`/`evaluate_today` functions, polled exactly
-  like the live cycle polls them.
+- `walk_forward.py` — rolling out-of-sample validation. **Run this before
+  believing any parameter result.**
+- `short_side_test.py` — long-only vs long/short comparison.
 
 ## Bug history worth remembering
 - **NaN vs None (original build)**: pandas silently converts `None` to
@@ -147,11 +138,11 @@ Original description follows, for whoever revisits it:
 - **qty=None on exits (2026-07-27/28)**: exit signals generated without a
   real held quantity are unconditionally rejected by the execution loop —
   a real NFLX exit was silently rejected this way and the position stayed
-  open. Both strategies now pass real held qty on every exit.
+  open. Every exit must carry a real held qty.
 - **Dry-run leakage (2026-07-29)**: a dry-run evaluation used to leave
   signals `pending`, where a separately scheduled always-live cycle could
-  (and did) execute one. Dry-run cycles now expire what they evaluate —
-  see `scripts/run_sneaky_pivot_cycle.py`.
+  (and did) execute one. Any future dry-run path must expire what it
+  evaluates rather than leaving it queued.
 - **Oversell → naked short (2026-08-03, twice)**: `reconcile()` runs at
   the END of a cycle, so an order submitted seconds earlier is still
   `accepted`, not `filled` — its fill lands one cycle late. The next

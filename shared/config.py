@@ -107,44 +107,22 @@ TRADE_UNIVERSE = [t for t in WATCHLIST if t not in BENCHMARK_SYMBOLS]
 MAX_CONCURRENT_POSITIONS = int(os.environ.get("TRADING_DESK_MAX_POSITIONS", "20"))
 
 
-# Accounts this system polls. The 'sneaky_pivot' paper account was CLOSED
-# by the user on 2026-08-03 -- Alpaca now returns ACCOUNT_CLOSED for it,
-# which alpaca-py can't even deserialize. Anything that iterates this tuple
-# (trail_stops, the dashboard, the daily review) would raise every cycle if
-# it were still listed. Back to a single live account.
+# Every Alpaca account this system polls. Single account today; the
+# per-account plumbing (alpaca_client's `account` parameter,
+# account_for_strategy below) is retained so a future strategy can be
+# given its own isolated account without touching every call site.
 KNOWN_ACCOUNTS = ("default",)
-SNEAKY_PIVOT_STRATEGIES = {"sneaky_pivot"}
-
-# Sneaky Pivot is DISABLED (2026-08-03, at the user's direction). In its
-# first and only live session it produced two naked short positions from a
-# stale-fill oversell bug (MSFT -25, NOK -1119) -- the bug itself is fixed
-# in three layers, but the strategy was never validated (backtest: -0.44%,
-# a coded approximation of an explicitly discretionary YouTube method), so
-# it was costing more attention than it was earning.
-#
-# Effect: no new sneaky_pivot entries OR exits are generated, by the cycle
-# or by a manual run. Two things deliberately still run against that
-# account: trail_stops (account-level protection of anything still held)
-# and the loop's end-of-day flatten (so positions the strategy already
-# opened get closed rather than orphaned).
-#
-# To re-enable: set SNEAKY_PIVOT_ENABLED=true in .env. Do NOT re-enable
-# without first backtesting it and confirming the oversell guards hold --
-# see signals/SKILL.md.
-SNEAKY_PIVOT_ENABLED = os.environ.get("SNEAKY_PIVOT_ENABLED", "false").lower() == "true"
 
 
 def account_for_strategy(strategy: str | None) -> str:
     """Single source of truth for which Alpaca account a strategy's orders
-    route through.
+    route through. One account today, so everything maps to 'default'.
 
-    Everything routes to 'default' again as of 2026-08-03: Sneaky Pivot
-    got its own paper account on 2026-07-28 to isolate its intraday PDT
-    count and circuit breaker from the swing strategy's, but that account
-    has since been closed and the strategy disabled. Routing anything to
-    the dead account would produce an unreconcilable order. The mapping
-    stays as a function (rather than being inlined) so a future strategy
-    can be given its own account without touching every call site."""
+    Kept as a function rather than inlined because the mapping is the only
+    thing that would need to change to give a future strategy its own
+    isolated account (separate PDT day-trade count and circuit breaker).
+    Historical rows in the DB may carry strategy names that no longer
+    exist; they resolve here to 'default' rather than erroring."""
     return "default"
 
 

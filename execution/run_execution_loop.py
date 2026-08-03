@@ -1,12 +1,11 @@
 """
 Execution loop: the only place pending signals become real (paper) orders.
 
-Design principle -- defense in depth: every signal gets risk-checked AGAIN
-here, even though day-trading-agent already checked before writing the
-signal. Two reasons:
-  1. rd-agent's signals were never risk-checked at all (that gating was
-     only added for day-trading-agent) -- this is the first and only
-     checkpoint for those.
+Design principle -- defense in depth: every signal gets risk-checked here
+regardless of whether the strategy that produced it did any checking of
+its own. Two reasons:
+  1. The live strategy does no risk gating at generation time, so this is
+     the first and only checkpoint for its signals.
   2. Time passes between signal creation and execution. Account equity,
      today's P&L, and the day-trade count can all have changed. Re-check
      against CURRENT state, not the state at signal-creation time.
@@ -26,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from execution import alpaca_client
 from shared import db, risk
-from shared.config import account_for_strategy, SNEAKY_PIVOT_STRATEGIES
+from shared.config import account_for_strategy
 
 
 def process_pending_signals(dry_run: bool = True) -> list[dict]:
@@ -37,12 +36,11 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
 
     Returns a list of result dicts, one per signal processed.
 
-    Each pending signal is routed to its own Alpaca account based on
-    account_for_strategy(sig["strategy"]) -- account snapshots (and
-    therefore risk limits) are fetched and cached per account, not once
-    globally, since Sneaky Pivot got its own paper account on 2026-07-28
-    specifically so its equity/PDT/circuit-breaker state stays isolated
-    from rd-agent's.
+    Each pending signal is routed to an Alpaca account via
+    account_for_strategy(sig["strategy"]); account snapshots (and
+    therefore risk limits) are fetched and cached per account rather than
+    once globally, so a future strategy on its own account keeps its
+    equity/PDT/circuit-breaker state isolated.
     """
     account_cache: dict[str, alpaca_client.AccountSnapshot] = {}
     position_cache: dict[str, dict[str, float]] = {}
@@ -67,10 +65,6 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
         for sig in pending:
             outcome = {"signal_id": sig["id"], "ticker": sig["ticker"], "action": sig["action"]}
             acct = account_for_strategy(sig["strategy"])
-            day_trade_scope = (
-                {"strategies": list(SNEAKY_PIVOT_STRATEGIES)} if acct == "sneaky_pivot"
-                else {"exclude_strategies": list(SNEAKY_PIVOT_STRATEGIES)}
-            )
 
             try:
                 account = _account(acct)
@@ -88,7 +82,9 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
                             f"Alpaca reports daytrade_count={account.daytrade_count} "
                             f"(>= 3) for a non-PDT account -- blocking new entry."
                         )
-                    risk.check_pdt_allows_trade(conn, limits, **day_trade_scope)
+                    # Unscoped: one account, so every recorded day trade
+                    # counts against the same PDT limit.
+                    risk.check_pdt_allows_trade(conn, limits)
                     risk.check_circuit_breaker(conn, limits, account.today_pnl)
 
                 qty = sig["qty"]

@@ -42,8 +42,8 @@ mcp = MCPServer(
 def portfolio_status(account: str = "default") -> dict:
     """Live portfolio tracker: equity, today's P&L, buying power, PDT
     status, open positions, standing stop orders, and performance vs the
-    S&P 500 benchmark. account: 'default' (swing/mean-reversion) or
-    'sneaky_pivot' (intraday). Read-only."""
+    S&P 500 benchmark. account: 'default' is the only live account.
+    Read-only."""
     from execution import alpaca_client
     from shared import db
     from shared.benchmark import compute_benchmark_comparison
@@ -140,10 +140,10 @@ def historical_analysis(symbol: str, days: int = 90) -> dict:
 @mcp.tool()
 def run_screener(strategy: str = "mean_reversion", symbols: list[str] | None = None) -> dict:
     """Run a strategy screener in ANALYSIS-ONLY mode: returns what the
-    strategy currently sees per symbol (signal or not, z-score/levels)
-    WITHOUT queueing anything to the signals table and without any risk of
-    a trade. strategy: 'mean_reversion' (daily swing) or 'sneaky_pivot'
-    (intraday levels). symbols defaults to the configured watchlist."""
+    strategy currently sees per symbol (signal or not, z-score) WITHOUT
+    queueing anything to the signals table and without any risk of a
+    trade. strategy: 'mean_reversion' (daily swing) is the only one
+    running. symbols defaults to the tradeable universe."""
     import pandas as pd
 
     from shared.config import TRADE_UNIVERSE
@@ -176,30 +176,7 @@ def run_screener(strategy: str = "mean_reversion", symbols: list[str] | None = N
             })
         return {"strategy": "mean_reversion", "results": results}
 
-    if strategy == "sneaky_pivot":
-        from signals.screeners.sneaky_pivot import SneakyPivotParams, compute_levels
-
-        daily = get_daily_bars(tickers, end - timedelta(days=70), end)
-        today = datetime.now().date()
-        results = []
-        for t in tickers:
-            bars = daily.get(t)
-            if bars is None or bars.empty:
-                results.append({"ticker": t, "status": "no_data"})
-                continue
-            prior = bars[bars.index.date < today]
-            levels = compute_levels(prior, SneakyPivotParams())
-            atr = compute_atr(prior)
-            results.append({
-                "ticker": t,
-                "status": "levels_computed",
-                "levels": levels,
-                "atr_14": None if pd.isna(atr) else float(atr),
-                "note": "Entry/exit evaluation needs live intraday bars during market hours; these are today's watch levels.",
-            })
-        return {"strategy": "sneaky_pivot", "results": results}
-
-    return {"error": f"unknown strategy {strategy!r}; use 'mean_reversion' or 'sneaky_pivot'"}
+    return {"error": f"unknown strategy {strategy!r}; only 'mean_reversion' is available"}
 
 
 # --------------------------------------------------------------------- risk
@@ -274,13 +251,15 @@ def backtest(strategy: str = "mean_reversion", symbols: list[str] | None = None,
              lookback_days: int = 365, entry_z: float = -1.5, exit_z: float = 0.0) -> dict:
     """Simulate trading conditions: backtest a strategy over real
     historical bars using the same production screener code the live desk
-    runs. strategy: 'mean_reversion' (entry_z/exit_z apply) or
-    'sneaky_pivot' (bar-by-bar intraday replay, params fixed to production
-    defaults, lookback capped ~90d by data availability). Returns total
+    runs. strategy: 'mean_reversion' (entry_z/exit_z apply). Returns total
     return, Sharpe, max drawdown, trade count, win rate, and SPY
-    buy-and-hold over the same window. Results are NOT logged to
-    backtest_runs -- use the scripts in signals/backtest/ for runs you
-    want recorded."""
+    buy-and-hold over the same window.
+
+    Results are NOT logged to backtest_runs -- use the scripts in
+    signals/backtest/ for runs you want recorded. NOTE: a single backtest
+    here is in-sample and easy to over-read; walk_forward.py established
+    that parameter tuning on this strategy fits noise. Treat entry_z /
+    exit_z sweeps as exploration, never as evidence for a change."""
     import numpy as np
     import pandas as pd
 
@@ -310,30 +289,8 @@ def backtest(strategy: str = "mean_reversion", symbols: list[str] | None = None,
         portfolio_daily = pd.concat(per_ticker_daily, axis=1).mean(axis=1)
         metrics = compute_metrics(portfolio_daily, all_trades)
 
-    elif strategy == "sneaky_pivot":
-        from signals.backtest.backtest_sneaky_pivot import compute_metrics, simulate_ticker
-        from shared.market_data import get_intraday_bars
-
-        intraday_start = max(start, end - timedelta(days=90))  # IEX intraday history limit
-        daily = get_daily_bars(tickers + ["SPY"], intraday_start - timedelta(days=90), end)
-        intraday = get_intraday_bars(tickers, intraday_start, end, minutes=15)
-        per_ticker_daily, all_trades = {}, []
-        for t in tickers:
-            if daily.get(t) is None or intraday.get(t) is None or intraday[t].empty:
-                continue
-            r = simulate_ticker(t, daily[t], intraday[t])
-            if not r["daily_returns"].empty:
-                per_ticker_daily[t] = r["daily_returns"]
-            all_trades.extend(r["trade_returns"])
-        if not per_ticker_daily:
-            return {"error": "no usable intraday data for any requested symbol"}
-        portfolio_daily = pd.concat(per_ticker_daily, axis=1).fillna(0.0).mean(axis=1)
-        metrics = compute_metrics(portfolio_daily, all_trades)
-        bars = daily
-        start = intraday_start
-
     else:
-        return {"error": f"unknown strategy {strategy!r}"}
+        return {"error": f"unknown strategy {strategy!r}; only 'mean_reversion' is available"}
 
     spy_return = None
     spy = bars.get("SPY")

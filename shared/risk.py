@@ -103,10 +103,10 @@ def count_recent_day_trades(
 
     strategies/exclude_strategies: scope the count to (or away from) a set
     of strategy names, via a join to the signals table. Added 2026-07-28
-    when Sneaky Pivot moved to its own Alpaca account -- without this, an
-    intraday day-trade count from one account's strategy would wrongly
-    count against the OTHER account's local PDT check, even though the
-    two accounts have entirely separate real PDT status with Alpaca.
+    for the case where a strategy runs on its own Alpaca account: without
+    scoping, one account's day-trade count would wrongly count against
+    another account's local PDT check, even though each account has its
+    own real PDT status with Alpaca. Unused while a single account runs.
     """
     cutoff = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 

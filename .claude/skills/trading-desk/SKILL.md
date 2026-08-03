@@ -13,12 +13,14 @@ rules, market data). `mcp_server.py` exposes read-only/simulation MCP
 tools. **One** Alpaca paper account: `default`, running the swing
 mean-reversion strategy. Credentials in gitignored `.env`.
 
-As of 2026-08-03 the `sneaky_pivot` intraday strategy is **disabled**
-(`shared.config.SNEAKY_PIVOT_ENABLED`, default false) and its dedicated
-paper account was **closed by the user** — it opened two naked shorts in
-its only live session and had never backtested positive. Code is retained
-but inert; see `signals/SKILL.md` before ever reviving it. Anything that
-still points at that account will raise `ACCOUNT_CLOSED`.
+One live strategy: `rd_mean_reversion` (swing, daily bars), scanning a
+57-name sector-diversified universe, max 20 concurrent positions at 5%
+of equity each. **Long-only** — short selling was tested and rejected
+(-22.4% short sleeve); see `signals/SKILL.md`.
+
+An intraday strategy was removed entirely on 2026-08-03 along with its
+paper account. Do not reintroduce it or its scaffolding unless the user
+asks. Its code is recoverable from git commit `036d8ce`.
 
 ## Check first, before touching anything trading-related
 
@@ -58,6 +60,9 @@ still points at that account will raise `ACCOUNT_CLOSED`.
 - **This system is long-only.** It has no code path that closes a short.
   If one appears, it's a bug — surface it to the user immediately; they
   must close it manually (Claude never places orders).
+- **Backtest results are not evidence for a parameter change.** Walk-
+  forward showed re-tuning underperforms leaving parameters alone. A new
+  *hypothesis* needs its own walk-forward written before it goes live.
 
 ## Automation roster (don't double-run these by hand)
 
@@ -67,16 +72,17 @@ still points at that account will raise `ACCOUNT_CLOSED`.
 | `TradingDeskDashboard` (Windows) | at logon | read-only dashboard :8787 |
 | `TradingDeskICloudMirror` (Windows) | every 15 min | robocopy /MIR to iCloud |
 | `trading-desk-daily-review` (Claude) | weekdays 3:15 PM CT | gather → narrative → PDF in Reports/ |
-| `trading-desk-nightly-rd` (Claude) | weekdays 5:30 PM CT | backtest refresh + drift verdict; proposal only after 3 consecutive winning nights |
+| `trading-desk-nightly-rd` (Claude) | weekdays 5:30 PM CT | operational health check. **Barred from proposing parameter changes** — walk-forward proved that inference is noise |
 | `trading-desk-weekly-rd` (Claude) | Sat 10 AM CT | weekly synthesis report |
 
 ## Where things live
 
 - Ledger: `data/trading.db` (signals, orders, backtest_runs,
   research_notes, account_baselines). Strategy names in the DB
-  (`rd_mean_reversion`, `sneaky_pivot`) are load-bearing — never rename.
+  (`rd_mean_reversion`) are load-bearing — never rename. Historical rows
+  reference strategies that no longer exist; that is expected.
 - Logs (JSONL, gitignored): `data/trading_day_log.jsonl` (loop),
-  `cycle_log`, `sneaky_pivot_log`, `trail_stop_log`, `rd_nightly_log`.
+  `cycle_log`, `trail_stop_log`, `rd_nightly_log`.
 - Reports: `Reports/` (gitignored). Dashboard serves them at /reports/.
 - Entry points live in `scripts/`; keep `.bat` paths stable — Task
   Scheduler references them.

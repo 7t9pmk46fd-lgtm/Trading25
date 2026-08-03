@@ -6,10 +6,9 @@ benchmark comparison (shared/benchmark.py).
 Start dates are approximations, not exact Alpaca account-creation
 timestamps (the API doesn't expose those): the default account is pegged
 to 2026-07-20, the day real trading actually began on it per the project's
-own session history; the sneaky_pivot account to 2026-07-28, the day it
-was created. Both accounts start from $100,000 paper equity, Alpaca's
+own session history. It starts from $100,000 paper equity, Alpaca's
 standard paper-account default, which matches what was actually observed
-on each account's first real balance check.
+on the account's first real balance check.
 
 Re-run any time to correct the seeded values -- set_account_baseline
 upserts rather than erroring on a second run.
@@ -28,7 +27,6 @@ from shared.db import db_session, init_db, set_account_baseline
 
 BASELINES = {
     "default": {"start_date": "2026-07-20", "start_equity": 100_000.0},
-    "sneaky_pivot": {"start_date": "2026-07-28", "start_equity": 100_000.0},
 }
 
 

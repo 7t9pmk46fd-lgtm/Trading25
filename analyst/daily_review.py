@@ -53,7 +53,6 @@ WORK_DIR = ROOT / "data" / "daily_review_work"
 REPORTS_DIR = ROOT / "Reports"
 LOG_FILES = {
     "rd_agent_daily_cycle": ROOT / "data" / "cycle_log.jsonl",
-    "sneaky_pivot_cycle": ROOT / "data" / "sneaky_pivot_log.jsonl",
     "trailing_stop_cycle": ROOT / "data" / "trail_stop_log.jsonl",
 }
 
@@ -84,7 +83,7 @@ def _read_todays_log_entries(path: Path, today: str) -> list[dict]:
 def _flatten_results(raw) -> list[dict]:
     """Normalizes a log entry's `results` field to a flat list of per-
     ticker dicts. Older/single-account scripts log a plain list; trail_stops.py
-    started logging {"default": [...], "sneaky_pivot": [...]} once it began
+    started logging {"<account>": [...]} per account once it began
     looping both Alpaca accounts in one invocation (2026-07-28 multi-account
     refactor) -- this was never propagated to this parser, which silently
     iterated the dict's string keys instead of its per-ticker rows.
