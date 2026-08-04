@@ -176,6 +176,148 @@ def _logs_section():
     return out
 
 
+def _readiness_section():
+    """Go-live readiness: how close this system is to being trustworthy
+    with real money, scored from evidence rather than opinion.
+
+    IMPORTANT FRAMING: this measures ENGINEERING readiness -- does the
+    thing work, is it protected, is it measured, has it demonstrated an
+    edge. A high score means the software is sound. It is NOT advice to
+    fund the account: that decision depends on tax treatment, position
+    size relative to net worth, and the user's own risk tolerance, none
+    of which this system knows. The single heaviest criterion is
+    deliberately "does it beat the benchmark," because a flawlessly
+    engineered strategy with no edge is still not worth real money.
+    """
+    checks = []
+
+    def add(key, label, weight, score, detail):
+        checks.append({"key": key, "label": label, "weight": weight,
+                       "score": max(0.0, min(1.0, score)), "detail": detail})
+
+    with db.db_session() as conn:
+        # 1. Demonstrated edge, out of sample, against the benchmark.
+        strat = conn.execute(
+            "SELECT total_return, sharpe FROM backtest_runs WHERE strategy='mean_reversion_fixed_oos' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        bench = conn.execute(
+            "SELECT total_return, sharpe FROM backtest_runs WHERE strategy='spy_oos_benchmark' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if strat and bench:
+            gap = strat["total_return"] - bench["total_return"]
+            beats = gap > 0 and (strat["sharpe"] or 0) >= (bench["sharpe"] or 0)
+            add("edge", "Beats benchmark out-of-sample", 30, 1.0 if beats else 0.0,
+                f"strategy {strat['total_return']:+.1%} (Sharpe {strat['sharpe']:.2f}) vs "
+                f"SPY {bench['total_return']:+.1%} (Sharpe {bench['sharpe']:.2f}) — "
+                + ("beats benchmark" if beats else f"trails by {abs(gap):.1%}"))
+        else:
+            add("edge", "Beats benchmark out-of-sample", 30, 0.0,
+                "no walk-forward result on record — run signals/backtest/walk_forward.py")
+
+        # 4. Reconciliation integrity.
+        stale = conn.execute(
+            """SELECT COUNT(*) c FROM orders WHERE alpaca_order_id IS NOT NULL AND filled_at IS NULL
+               AND status NOT IN ('canceled','replaced','expired','rejected')
+               AND submitted_at < datetime('now','-1 hour')"""
+        ).fetchone()["c"]
+        add("reconciliation", "Order reconciliation clean", 5, 1.0 if stale == 0 else 0.0,
+            "no stale unreconciled orders" if stale == 0 else f"{stale} order(s) unreconciled over an hour")
+
+    # 2. Live paper track record.
+    entries = _tail_jsonl(LOG_FILES["market_loop"], 5000)
+    sessions = {str(e.get("logged_at", ""))[:10] for e in entries if e.get("event") == "swing_cycle"}
+    target = 60
+    add("track_record", f"Live paper sessions ({len(sessions)}/{target})", 15,
+        len(sessions) / target,
+        f"{len(sessions)} trading session(s) with a completed scan; {target} is roughly a quarter "
+        f"of live behaviour, enough to see the strategy in more than one regime")
+
+    # 3. Protection integrity.
+    accounts = _section(_accounts_section)
+    total_pos = day_tif = unprotected = shorts = 0
+    if isinstance(accounts, dict):
+        for acct in accounts.values():
+            if not isinstance(acct, dict) or "positions" not in acct:
+                continue
+            stops = acct.get("stops", {})
+            for p in acct["positions"]:
+                total_pos += 1
+                if p["qty"] < 0:
+                    shorts += 1
+                    continue
+                st = stops.get(p["symbol"])
+                if st is None:
+                    unprotected += 1
+                elif st.get("time_in_force") == "day":
+                    day_tif += 1
+    bad = day_tif + unprotected + shorts
+    score = 1.0 if total_pos == 0 else max(0.0, 1 - bad / total_pos)
+    add("protection", "Every position durably protected", 15, score,
+        "all positions carry GTC stops" if bad == 0 else
+        f"{unprotected} unprotected, {day_tif} DAY-TIF (expire at close), {shorts} short of {total_pos}")
+
+    # 5. Session reliability.
+    by_day = {}
+    for e in entries:
+        day = str(e.get("logged_at", ""))[:10]
+        if not day:
+            continue
+        bucket = by_day.setdefault(day, {"errors": 0, "steps": 0})
+        bucket["steps"] += 1
+        if e.get("status") == "error":
+            bucket["errors"] += 1
+    recent = sorted(by_day)[-10:]
+    clean = [d for d in recent if by_day[d]["errors"] == 0]
+    rel = len(clean) / len(recent) if recent else 0.0
+    add("reliability", "Error-free sessions", 10, rel,
+        f"{len(clean)}/{len(recent)} recent day(s) ran without a step error" if recent
+        else "no session history yet")
+
+    # 6. Automated tests.
+    test_files = list(ROOT.glob("tests/test_*.py")) + list(ROOT.glob("test_*.py"))
+    add("tests", "Automated test suite", 10, 1.0 if test_files else 0.0,
+        f"{len(test_files)} test file(s)" if test_files else
+        "none — every bug so far was found in production, not by a test")
+
+    # 7. Realized P&L attribution.
+    try:
+        risk_src = (ROOT / "shared" / "risk.py").read_text()
+        placeholder = "return 0.0" in risk_src.split("def get_today_realized_pnl")[1][:900]
+    except Exception:
+        placeholder = True
+    add("pnl", "Realized P&L attribution", 10, 0.0 if placeholder else 1.0,
+        "get_today_realized_pnl() is still a placeholder returning 0.0 — the circuit breaker "
+        "runs on Alpaca equity instead, and per-trade P&L is not attributed"
+        if placeholder else "realized P&L computed from fills")
+
+    # 8. Risk controls present in code.
+    try:
+        exec_src = (ROOT / "execution" / "run_execution_loop.py").read_text()
+        loop_src = (ROOT / "scripts" / "run_trading_day.py").read_text()
+        cfg_src = (ROOT / "shared" / "config.py").read_text()
+        guards = {
+            "oversell guard": "refusing to sell" in exec_src,
+            "stop required on buys": "no stop_price set" in exec_src,
+            "paper-only guard": "ALPACA_PAPER" in loop_src and "refused_to_start" in loop_src,
+            "position ceiling": "MAX_CONCURRENT_POSITIONS" in cfg_src,
+        }
+    except Exception:
+        guards = {}
+    present = sum(1 for v in guards.values() if v)
+    add("risk_controls", "Risk controls in force", 5,
+        present / len(guards) if guards else 0.0,
+        ", ".join(k for k, v in guards.items() if v) or "could not verify")
+
+    total_weight = sum(c["weight"] for c in checks)
+    pct = sum(c["score"] * c["weight"] for c in checks) / total_weight * 100
+    blocking = [c["label"] for c in checks if c["score"] < 1.0 and c["weight"] >= 15]
+
+    return {"percent": round(pct, 1), "checks": checks, "blocking": blocking,
+            "disclaimer": "Engineering readiness only. Not a recommendation to fund the "
+                          "account with real money — that decision depends on factors this "
+                          "system has no knowledge of."}
+
+
 def _corrections_section():
     """Latest daily-review narrative's mistakes & corrections, if any."""
     work_root = ROOT / "data" / "daily_review_work"
@@ -293,6 +435,7 @@ def build_state() -> dict:
         "logs": _section(_logs_section),
         "corrections": _section(_corrections_section),
         "reports": _section(_reports_section),
+        "readiness": _section(_readiness_section),
     }
     state["attention"] = _attention(state)
     return state

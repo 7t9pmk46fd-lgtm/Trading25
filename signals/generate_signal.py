@@ -75,33 +75,74 @@ def generate_and_queue_batch(tickers: list[str]) -> list[dict]:
             _cache["held_qty"] = {p["symbol"]: p["qty"] for p in alpaca_client.get_open_positions()}
         return _cache["held_qty"]
 
-    # Portfolio-level ceiling. Counts real exposure (held positions plus
-    # unfilled buy orders) and everything queued earlier in THIS batch --
-    # otherwise a single cycle could queue 50 buys that only collectively
-    # blow the limit once they all execute. Exits are never limited.
-    queued_buys = {"n": 0}
-
-    def _capacity_left() -> int:
-        return MAX_CONCURRENT_POSITIONS - len(_held_positions()) - queued_buys["n"]
-
-    results = []
+    # --- Pass 1: evaluate every ticker, write nothing ---------------------
+    # Deliberately split from queueing. With a 500+ name universe the
+    # scan routinely produces more entry candidates than there are free
+    # position slots, and queueing inline would fill those slots in
+    # whatever order the tickers happen to be listed -- i.e. alphabetically.
+    # The universe would then be decorative: only names near the start of
+    # the alphabet could ever trade.
+    plans = []
     for ticker in tickers:
         try:
-            results.append(_screen_one(ticker, all_bars, _account, _held_positions, _held_qty,
-                                       _capacity_left, queued_buys))
+            plans.append(_plan_one(ticker, all_bars, _account, _held_positions, _held_qty))
         except Exception as e:
             # A bug in one ticker (e.g. the unrecognized-signal guard
             # tripping) must not cost the rest of an unattended batch its
-            # signals -- isolate per-ticker like the original per-ticker
-            # loop did, now that fetching is batched instead of the
-            # processing.
-            results.append({"ticker": ticker, "status": "error", "error": str(e)})
+            # signals -- isolate per-ticker.
+            plans.append({"ticker": ticker, "status": "error", "error": str(e)})
+
+    # --- Pass 2: queue exits unconditionally, then the best entries -------
+    results = []
+    entries = []
+    for plan in plans:
+        if plan["status"] != "actionable":
+            results.append(plan)
+        elif plan["action"] == "sell":
+            # Exits are NEVER rationed. Blocking an exit is far more
+            # dangerous than missing an entry.
+            results.append(_queue(plan))
+        else:
+            entries.append(plan)
+
+    # Rank entries by conviction: the most negative z-score is the most
+    # stretched below its mean, which is precisely what this strategy
+    # claims an edge on. Ties broken by ticker for determinism.
+    entries.sort(key=lambda p: (p["zscore"], p["ticker"]))
+
+    capacity = MAX_CONCURRENT_POSITIONS - len(_held_positions())
+    for rank, plan in enumerate(entries):
+        if rank < capacity:
+            queued = _queue(plan)
+            queued["rank"] = rank + 1
+            results.append(queued)
+        else:
+            results.append({"ticker": plan["ticker"], "status": "skipped_position_limit",
+                            "zscore": plan["zscore"], "rank": rank + 1,
+                            "limit": MAX_CONCURRENT_POSITIONS})
 
     return results
 
 
-def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
-                capacity_left=None, queued_buys=None) -> dict:
+def _queue(plan: dict) -> dict:
+    """Write one planned signal to the queue. Split from planning so the
+    decision of WHICH signals to take is made with the whole scan in view."""
+    with db.db_session() as conn:
+        signal_id = db.insert_signal(
+            conn, ticker=plan["ticker"], action=plan["action"], strategy="rd_mean_reversion",
+            qty=plan["qty"], stop_price=plan.get("stop_price"),
+            confidence=None, reasoning=plan["reasoning"],
+        )
+    return {"ticker": plan["ticker"], "status": "queued", "signal_id": signal_id,
+            "action": plan["action"], "qty": plan["qty"],
+            "stop_price": plan.get("stop_price"), "zscore": plan["zscore"]}
+
+
+def _plan_one(ticker, all_bars, get_account, get_held_positions, get_held_qty) -> dict:
+    """Decide what this ticker WOULD do. Never writes to the DB -- the
+    caller ranks every plan against the others before anything is queued.
+    Returns status 'actionable' with the full order shape, or a terminal
+    status explaining why not."""
     if ticker not in all_bars or all_bars[ticker].empty:
         return {"ticker": ticker, "status": "no_data"}
 
@@ -110,7 +151,8 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
 
     if sig is None:
         last_z = result["zscore"].iloc[-1]
-        return {"ticker": ticker, "status": "no_signal", "zscore": float(last_z)}
+        return {"ticker": ticker, "status": "no_signal",
+                "zscore": None if pd.isna(last_z) else float(last_z)}
 
     if sig["signal"] not in KNOWN_SIGNALS:
         raise ValueError(
@@ -120,8 +162,9 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
         )
 
     action = "buy" if sig["signal"] in ("enter_long", "exit_short") else "sell"
-    reasoning = f"signal={sig['signal']}, zscore={sig['zscore']:.2f}, close={sig['close']:.2f}"
-    qty = None
+    zscore = float(sig["zscore"])
+    reasoning = f"signal={sig['signal']}, zscore={zscore:.2f}, close={sig['close']:.2f}"
+    stop_price = None
 
     if action == "buy":
         # The screener simulates its position from scratch off price
@@ -129,16 +172,8 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
         # Without this check, a lookback-window rollover could replay a
         # "new" enter_long for a ticker we already hold, stacking exposure
         # past the intended per-trade cap. Real position state always wins.
-        # Safe to cache across the batch: queuing a signal doesn't change
-        # Alpaca's real positions, only executing one does.
         if ticker in get_held_positions():
-            return {"ticker": ticker, "status": "skipped_already_holding"}
-
-        # Portfolio ceiling -- checked before any sizing work, and only for
-        # entries. An exit must never be blocked by a position limit.
-        if capacity_left is not None and capacity_left() <= 0:
-            return {"ticker": ticker, "status": "skipped_position_limit",
-                    "limit": MAX_CONCURRENT_POSITIONS}
+            return {"ticker": ticker, "status": "skipped_already_holding", "zscore": zscore}
 
         entry_price = sig["close"]
         atr = compute_atr(all_bars[ticker])
@@ -146,42 +181,31 @@ def _screen_one(ticker, all_bars, get_account, get_held_positions, get_held_qty,
             # Not enough history (or degenerate zero-range data) to place
             # a real stop -- refuse rather than fall back to a made-up
             # distance. A buy with no defensible stop doesn't get queued.
-            return {"ticker": ticker, "status": "no_stop_data"}
+            return {"ticker": ticker, "status": "no_stop_data", "zscore": zscore}
 
         stop_price = entry_price - 2 * atr  # standard 2xATR stop distance
         if stop_price <= 0:
-            return {"ticker": ticker, "status": "no_stop_data"}
+            return {"ticker": ticker, "status": "no_stop_data", "zscore": zscore}
 
         account = get_account()
         limits = RiskLimits(account_equity=account.equity)
         sizing = compute_position_size(limits, entry_price, stop_price)
         qty = sizing["qty"]
+        if qty <= 0:
+            return {"ticker": ticker, "status": "size_too_small", "zscore": zscore}
         reasoning += f", atr={atr:.2f}, stop_price={stop_price:.2f}, sizing={sizing}"
     else:
-        # The screener simulates its position from scratch off price
-        # history alone -- it has no memory of whether a real position
-        # exists. Without this, every exit signal left qty=None, which
+        # The screener has no memory of whether a real position exists.
+        # Without this, every exit signal left qty=None, which
         # run_execution_loop.py unconditionally rejects: found 2026-07-28
-        # after a real exit_long for NFLX (z-score reverted to 0.27) was
-        # silently rejected and the position stayed open despite the
-        # strategy's own logic wanting to close it. Same bug class already
-        # fixed in day-trading-agent's generate_and_queue_signal.
+        # after a real exit_long for NFLX was silently rejected and the
+        # position stayed open despite the strategy wanting to close it.
         qty = get_held_qty().get(ticker)
         if not qty:
-            return {"ticker": ticker, "status": "skipped_not_held"}
+            return {"ticker": ticker, "status": "skipped_not_held", "zscore": zscore}
 
-    with db.db_session() as conn:
-        signal_id = db.insert_signal(
-            conn, ticker=ticker, action=action, strategy="rd_mean_reversion",
-            qty=qty, stop_price=stop_price if action == "buy" else None,
-            confidence=None, reasoning=reasoning,
-        )
-
-    if action == "buy" and queued_buys is not None:
-        queued_buys["n"] += 1
-
-    return {"ticker": ticker, "status": "queued", "signal_id": signal_id, "action": action, "qty": qty,
-            "stop_price": stop_price if action == "buy" else None}
+    return {"ticker": ticker, "status": "actionable", "action": action, "qty": qty,
+            "stop_price": stop_price, "reasoning": reasoning, "zscore": zscore}
 
 
 def generate_and_queue(ticker: str) -> dict:

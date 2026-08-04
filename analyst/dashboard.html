@@ -74,6 +74,20 @@
   .muted { color: var(--ink-3); }
   .small { font-size: 12px; color: var(--ink-2); }
 
+  .meter { height: 10px; border-radius: 999px; background: var(--inset);
+           overflow: hidden; margin: 2px 0 12px; border: 1px solid var(--line-soft); }
+  .meter > span { display: block; height: 100%; border-radius: 999px;
+                  transition: width .5s ease; }
+  .ready-head { display: flex; align-items: baseline; gap: 12px; }
+  .ready-head .pct { font-size: 30px; font-weight: 650; letter-spacing: -.02em;
+                     font-variant-numeric: tabular-nums; }
+  .crit { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px;
+          padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+  .crit:last-child { border-bottom: none; }
+  .crit .name { font-weight: 600; }
+  .crit .pts { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums;
+               text-align: right; white-space: nowrap; }
+  .crit .why { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
   ul.attention { list-style: none; display: grid; gap: 8px; }
   ul.attention li { background: var(--inset); border: 1px solid var(--line-soft);
                     border-left: 3px solid var(--ink-3); border-radius: 8px; padding: 9px 14px; }
@@ -102,6 +116,7 @@
 <div id="error-banner"></div>
 <div class="tiles" id="tiles"></div>
 <div class="grid">
+  <div class="card wide"><h2>🚦 Go-live readiness <span class="count" id="ready-pct"></span></h2><div class="body" id="readiness"></div></div>
   <div class="card wide"><h2>⚠️ Needs attention <span class="count" id="att-count"></span></h2><div class="body" id="attention"></div></div>
   <div class="card wide"><h2>🛡 Positions &amp; protection <span class="count" id="pos-count"></span></h2><div class="body" id="positions"></div></div>
   <div class="card"><h2>📡 Signals today</h2><div class="body" id="signals"></div></div>
@@ -121,9 +136,15 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const t = iso => {
   if (!iso) return "—";
   let s = String(iso);
-  // SQLite datetime('now') stores naive UTC ("YYYY-MM-DD HH:MM:SS") -- tag it
-  // as UTC so it renders in the viewer's local time like the ISO log stamps do.
-  if (s.includes(" ") && !s.includes("T")) s = s.replace(" ", "T") + "Z";
+  // Two space-separated shapes arrive here: SQLite's naive UTC
+  // ("YYYY-MM-DD HH:MM:SS"), which must be tagged Z, and Python's
+  // str(datetime) for the market clock, which already carries an offset
+  // ("2026-08-04 16:00:00-04:00"). Appending Z to the latter produced an
+  // invalid date and rendered the close time as "Invalid Date".
+  if (s.includes(" ") && !s.includes("T")) {
+    s = s.replace(" ", "T");
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += "Z";
+  }
   return new Date(s).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
 };
 const SEV_ICON = { critical: "⛔", warning: "⚠️", info: "ℹ️" };
@@ -161,6 +182,32 @@ function render(s) {
         <div class="sub">${b ? `${fmtPct(b.portfolio_return_pct)} vs ${fmtPct(b.benchmark_return_pct)} since ${b.start_date}` : "no baseline seeded"}</div></div>`;
   }
   $("tiles").innerHTML = tiles;
+
+  const rd = s.readiness || {};
+  if (rd.checks) {
+    const pct = rd.percent;
+    // Red below 50, amber to 85, green above -- a colour that only turns
+    // green when the heavy criteria (edge, protection, track record) pass.
+    const col = pct >= 85 ? "var(--good)" : pct >= 50 ? "var(--warning)" : "var(--critical)";
+    $("ready-pct").textContent = pct + "%";
+    const rows = rd.checks.slice().sort((a, b) => b.weight - a.weight).map(c => {
+      const icon = c.score >= 1 ? "✅" : (c.score > 0 ? "🟡" : "⛔");
+      return `<div class="crit"><div class="name">${icon} ${esc(c.label)}</div>
+        <div class="pts">${Math.round(c.score * c.weight)} / ${c.weight} pts</div>
+        <div class="why">${esc(c.detail)}</div></div>`;
+    }).join("");
+    $("readiness").innerHTML =
+      `<div class="ready-head"><span class="pct" style="color:${col}">${pct}%</span>
+         <span class="small">ready for live money</span></div>
+       <div class="meter"><span style="width:${pct}%;background:${col}"></span></div>
+       ${rd.blocking && rd.blocking.length
+          ? `<div class="small" style="margin-bottom:8px">🚧 <b>Blocking:</b> ${rd.blocking.map(esc).join(" · ")}</div>`
+          : ""}
+       ${rows}
+       <div class="small muted" style="margin-top:10px">${esc(rd.disclaimer || "")}</div>`;
+  } else {
+    $("readiness").innerHTML = empty("🚦", "readiness unavailable");
+  }
 
   const att = s.attention || [];
   $("att-count").textContent = att.length || "";

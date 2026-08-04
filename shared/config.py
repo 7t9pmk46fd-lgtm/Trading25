@@ -19,6 +19,7 @@ Optional:
   TRADING_DESK_WATCHLIST - comma-separated tickers for automated signal
                             generation (default: a small liquid-name list)
 """
+import json
 import os
 from pathlib import Path
 
@@ -82,11 +83,40 @@ _DEFAULT_WATCHLIST = ",".join([
     # Benchmarks / broad ETFs -- MONITORED, NEVER TRADED (see BENCHMARK_SYMBOLS)
     "SPY", "QQQ",
 ])
-WATCHLIST = [
-    t.strip().upper()
-    for t in os.environ.get("TRADING_DESK_WATCHLIST", _DEFAULT_WATCHLIST).split(",")
-    if t.strip()
-]
+def _load_universe_file() -> list[str] | None:
+    """Index-membership universe built by scripts/build_universe.py
+    (S&P 500 + NASDAQ-100 + Dow 30, each symbol validated as tradable on
+    Alpaca and confirmed to return bars).
+
+    Returns None on any problem so the caller falls back to the built-in
+    list -- a corrupt or truncated file must never leave the desk
+    scanning nothing, and a silently empty universe would look exactly
+    like "no signals today."
+    """
+    path = PROJECT_ROOT / "data" / "universe.json"
+    try:
+        data = json.loads(path.read_text())
+        symbols = [str(s).strip().upper() for s in data.get("symbols", [])]
+        symbols = [s for s in symbols if s]
+        return symbols if len(symbols) >= 50 else None
+    except Exception:
+        return None
+
+
+_UNIVERSE_FILE = _load_universe_file()
+
+# Precedence: explicit env override > generated index universe > built-in
+# fallback. The env var stays first so a narrower list can be forced for a
+# test run without deleting the generated file.
+if os.environ.get("TRADING_DESK_WATCHLIST"):
+    WATCHLIST = [t.strip().upper() for t in os.environ["TRADING_DESK_WATCHLIST"].split(",") if t.strip()]
+    WATCHLIST_SOURCE = "env:TRADING_DESK_WATCHLIST"
+elif _UNIVERSE_FILE:
+    WATCHLIST = sorted(set(_UNIVERSE_FILE) | set(_DEFAULT_WATCHLIST.split(",")))
+    WATCHLIST_SOURCE = "data/universe.json"
+else:
+    WATCHLIST = [t.strip().upper() for t in _DEFAULT_WATCHLIST.split(",") if t.strip()]
+    WATCHLIST_SOURCE = "built-in fallback"
 
 # Broad-market ETFs are watched (dashboard, daily review, benchmarking) but
 # never traded by a single-name mean-reversion strategy. Every backtest has
