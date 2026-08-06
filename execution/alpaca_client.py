@@ -98,6 +98,28 @@ def get_market_clock(account: str = "default") -> dict:
     }
 
 
+def get_portfolio_history(days: int = 30, account: str = "default") -> dict:
+    """Daily equity/P&L history straight from Alpaca. Needed to write a
+    report for a PAST session: the account snapshot only ever describes
+    right now, so a backfilled daily review would otherwise carry today's
+    equity under yesterday's date."""
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+    client = _get_trading_client(account)
+    history = client.get_portfolio_history(
+        GetPortfolioHistoryRequest(period=f"{days}D", timeframe="1D")
+    )
+    from datetime import datetime as _dt, timezone as _tz
+    out = {}
+    for i, ts in enumerate(history.timestamp or []):
+        day = _dt.fromtimestamp(ts, tz=_tz.utc).date().isoformat()
+        equity = (history.equity or [None] * (i + 1))[i]
+        pnl = (history.profit_loss or [None] * (i + 1))[i]
+        if equity is not None:
+            out[day] = {"equity": float(equity), "pnl": float(pnl) if pnl is not None else None}
+    return out
+
+
 def get_open_positions(account: str = "default") -> list[dict]:
     client = _get_trading_client(account)
     positions = client.get_all_positions()

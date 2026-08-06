@@ -46,12 +46,13 @@ sys.path.insert(0, str(ROOT))
 from shared import db
 from shared.config import WATCHLIST, KNOWN_ACCOUNTS
 from shared.benchmark import compute_benchmark_comparison
-from shared.market_data import get_daily_bars_cached, get_latest_trade_prices
+from shared.market_data import get_daily_bars, get_daily_bars_cached, get_latest_trade_prices
 from execution import alpaca_client
 
 WORK_DIR = ROOT / "data" / "daily_review_work"
 REPORTS_DIR = ROOT / "Reports"
 LOG_FILES = {
+    "market_loop": ROOT / "data" / "trading_day_log.jsonl",
     "rd_agent_daily_cycle": ROOT / "data" / "cycle_log.jsonl",
     "trailing_stop_cycle": ROOT / "data" / "trail_stop_log.jsonl",
 }
@@ -59,6 +60,63 @@ LOG_FILES = {
 
 def _today_str() -> str:
     return datetime.now().date().isoformat()
+
+
+def _reconstruct_positions(conn, day: str, closes: dict) -> list[dict]:
+    """Positions held at the end of `day`, rebuilt from the local order
+    ledger and priced at that day's close.
+
+    Only used for backfilled reports. Every trade this system makes is
+    recorded here, so the share counts are near-exact; avg entry is a
+    quantity-weighted average of buy fills, which is right unless a
+    position was partly sold and re-bought.
+
+    Known imprecision: the `orders` table stores the ORDERED quantity, not
+    the filled quantity, so a partially filled order is treated as fully
+    filled. A backfill can therefore under-report a residual holding by
+    the unfilled remainder. Live reports are unaffected -- they read real
+    positions from Alpaca.
+    """
+    # Only orders belonging to THIS account's history. Orders from the
+    # sneaky_pivot strategy were submitted to a separate paper account that
+    # the user closed on 2026-08-03; including them would resurrect
+    # positions (AMD, INTC, NOK) that never existed in the default account
+    # and inflate every backfilled report before that date.
+    rows = conn.execute(
+        """SELECT o.ticker, o.side, o.qty, o.fill_price FROM orders o
+           LEFT JOIN signals s ON o.signal_id = s.id
+           WHERE o.filled_at IS NOT NULL AND date(o.filled_at) <= ?
+             AND COALESCE(s.strategy, '') != 'sneaky_pivot'
+           ORDER BY o.filled_at""",
+        (day,),
+    ).fetchall()
+
+    book: dict[str, dict] = {}
+    for r in rows:
+        b = book.setdefault(r["ticker"], {"qty": 0.0, "cost": 0.0})
+        if r["side"] == "buy":
+            b["qty"] += r["qty"]
+            b["cost"] += r["qty"] * (r["fill_price"] or 0)
+        else:
+            # Reduce cost proportionally so avg entry survives a partial sell.
+            if b["qty"] > 0:
+                b["cost"] *= max(0.0, (b["qty"] - r["qty"])) / b["qty"]
+            b["qty"] -= r["qty"]
+
+    positions = []
+    for ticker, b in sorted(book.items()):
+        if b["qty"] <= 0.001:
+            continue
+        avg_entry = b["cost"] / b["qty"] if b["qty"] else 0.0
+        close = closes.get(ticker)
+        positions.append({
+            "symbol": ticker,
+            "qty": round(b["qty"], 4),
+            "avg_entry_price": avg_entry,
+            "current_price": close if close is not None else avg_entry,
+            "unrealized_pl": (close - avg_entry) * b["qty"] if close is not None else 0.0,
+        })
+    return positions
 
 
 def _read_todays_log_entries(path: Path, today: str) -> list[dict]:
@@ -92,24 +150,63 @@ def _flatten_results(raw) -> list[dict]:
     if isinstance(raw, dict):
         flat = []
         for account, rows in raw.items():
-            for row in rows or []:
+            # Not every dict-shaped result is per-account rows: the market
+            # loop's `clock` step logs {"is_open": true, ...}, whose values
+            # are scalars. Only descend into lists.
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
                 if isinstance(row, dict):
                     flat.append({**row, "account": account})
         return flat
-    return [r for r in (raw or []) if isinstance(r, dict)]
+    if isinstance(raw, list):
+        return [r for r in raw if isinstance(r, dict)]
+    return []
+
+
+def _step_results(entry: dict) -> list[dict]:
+    """Per-item rows out of a log entry, whichever shape it uses.
+
+    The standalone cycle scripts log `results`/`signals`; the market loop
+    wraps each step's return value in `result` (singular). Both are read
+    here -- when the loop became the primary driver, the report kept
+    parsing only the old keys and silently reported zero errors and zero
+    stop activity on days that had plenty of both.
+    """
+    for key in ("results", "result", "signals"):
+        rows = _flatten_results(entry.get(key))
+        if rows:
+            return rows
+    # The loop nests the swing cycle's own summary inside `result`.
+    inner = entry.get("result")
+    if isinstance(inner, dict):
+        for key in ("signals", "execution", "reconciliation"):
+            rows = _flatten_results(inner.get(key))
+            if rows:
+                return rows
+    return []
 
 
 def _extract_errors(source: str, entries: list[dict]) -> list[dict]:
-    """Pulls anything that looks like a per-ticker error or a top-level
-    execution/reconciliation error out of a cycle log's entries, tagged
-    with which source produced it."""
+    """Pulls anything that looks like an error out of a cycle log's
+    entries, tagged with which source produced it."""
     errors = []
     for entry in entries:
+        # A market-loop STEP that failed outright: the loop catches the
+        # exception, marks the step status 'error', and keeps cycling.
+        if entry.get("status") == "error" and entry.get("error"):
+            errors.append({"source": source, "ticker": None,
+                           "error": f"{entry.get('event', 'step')}: {entry['error']}",
+                           "logged_at": entry.get("logged_at")})
         for key in ("execution_error", "reconciliation_error"):
             if entry.get(key):
                 errors.append({"source": source, "ticker": None, "error": entry[key], "logged_at": entry.get("logged_at")})
-        results = _flatten_results(entry.get("results")) or _flatten_results(entry.get("signals"))
-        for result in results:
+        inner = entry.get("result")
+        if isinstance(inner, dict):
+            for key in ("execution_error", "reconciliation_error"):
+                if inner.get(key):
+                    errors.append({"source": source, "ticker": None, "error": inner[key], "logged_at": entry.get("logged_at")})
+        for result in _step_results(entry):
             if result.get("status") == "error":
                 errors.append({
                     "source": source,
@@ -123,7 +220,7 @@ def _extract_errors(source: str, entries: list[dict]) -> list[dict]:
 def _extract_stop_events(entries: list[dict]) -> list[dict]:
     events = []
     for entry in entries:
-        for result in _flatten_results(entry.get("results")):
+        for result in _step_results(entry):
             status = result.get("status")
             if status in ("raised_stop", "placed_initial_stop", "converted_to_gtc", "recovered_from_stuck_chain"):
                 events.append({
@@ -137,17 +234,64 @@ def _extract_stop_events(entries: list[dict]) -> list[dict]:
     return events
 
 
-def gather() -> dict:
+def gather(day: str | None = None) -> dict:
+    """Collect one session's data. `day` defaults to today; pass an older
+    YYYY-MM-DD to backfill a session that was missed.
+
+    Backfill is not simply "today's code with a different date filter":
+    the account snapshot and open positions only ever describe RIGHT NOW,
+    so a naive backfill would file today's equity and today's holdings
+    under an old date and quietly misreport history. Equity comes from
+    Alpaca's portfolio history instead, positions are rebuilt from the
+    order ledger, and prices come from that day's closing bars.
+    """
+    from datetime import timedelta
+
     today = _today_str()
+    day = day or today
+    backfill = day < today
 
-    account = alpaca_client.get_account_snapshot()
-    open_positions = alpaca_client.get_open_positions()
-    account_equity_by_name = {name: alpaca_client.get_account_snapshot(name).equity for name in KNOWN_ACCOUNTS}
+    # Closing bars spanning the session and the one before it (for the
+    # prior-close comparison). Not the same-day cache -- that is keyed on
+    # today and would be useless for an older date.
+    bar_start = datetime.fromisoformat(day) - timedelta(days=12)
+    bar_end = datetime.fromisoformat(day) + timedelta(days=1)
+    if backfill:
+        daily_bars = get_daily_bars(WATCHLIST + ["SPY"], bar_start, bar_end)
+    else:
+        daily_bars = get_daily_bars_cached(WATCHLIST, datetime.now() - timedelta(days=12), datetime.now())
 
-    try:
-        spy_price = get_latest_trade_prices(["SPY"])["SPY"]
-    except Exception:
-        spy_price = None
+    def _close_on(ticker, on_day):
+        bars = daily_bars.get(ticker)
+        if bars is None or bars.empty:
+            return None
+        sel = bars[bars.index.date <= datetime.fromisoformat(on_day).date()]
+        return float(sel["close"].iloc[-1]) if not sel.empty else None
+
+    closes_on_day = {t: _close_on(t, day) for t in WATCHLIST}
+
+    if backfill:
+        history = alpaca_client.get_portfolio_history(days=45)
+        hist = history.get(day)
+        if hist is None:
+            raise RuntimeError(
+                f"Alpaca portfolio history has no entry for {day} -- it may not have "
+                f"been a trading day, or it is outside the available window."
+            )
+        equity, day_pnl = hist["equity"], hist["pnl"]
+        account = type("Snapshot", (), {"equity": equity, "today_pnl": day_pnl, "buying_power": None})()
+        with db.db_session() as conn:
+            open_positions = _reconstruct_positions(conn, day, closes_on_day)
+        account_equity_by_name = {KNOWN_ACCOUNTS[0]: equity}
+        spy_price = _close_on("SPY", day)
+    else:
+        account = alpaca_client.get_account_snapshot()
+        open_positions = alpaca_client.get_open_positions()
+        account_equity_by_name = {name: alpaca_client.get_account_snapshot(name).equity for name in KNOWN_ACCOUNTS}
+        try:
+            spy_price = get_latest_trade_prices(["SPY"])["SPY"]
+        except Exception:
+            spy_price = None
 
     with db.db_session() as conn:
         orders_today = [
@@ -156,13 +300,13 @@ def gather() -> dict:
                    LEFT JOIN signals s ON o.signal_id = s.id
                    WHERE date(o.submitted_at) = ?
                    ORDER BY o.submitted_at""",
-                (today,),
+                (day,),
             ).fetchall()
         ]
         signals_today = [
             dict(r) for r in conn.execute(
                 "SELECT * FROM signals WHERE date(created_at) = ? ORDER BY created_at",
-                (today,),
+                (day,),
             ).fetchall()
         ]
 
@@ -177,30 +321,43 @@ def gather() -> dict:
     for s in signals_today:
         signal_counts[s["status"]] = signal_counts.get(s["status"], 0) + 1
 
-    all_log_entries = {name: _read_todays_log_entries(path, today) for name, path in LOG_FILES.items()}
+    all_log_entries = {name: _read_todays_log_entries(path, day) for name, path in LOG_FILES.items()}
     errors = []
     stop_events = []
     for name, entries in all_log_entries.items():
         errors.extend(_extract_errors(name, entries))
+        # Stop activity now comes through the market loop's trail_stops
+        # step as well as the standalone script's own log.
         if name == "trailing_stop_cycle":
             stop_events.extend(_extract_stop_events(entries))
+        elif name == "market_loop":
+            stop_events.extend(_extract_stop_events(
+                [e for e in entries if e.get("event") == "trail_stops"]))
 
-    # Market context: prior close from cached daily bars, current/last
-    # price from a live quote -- a same-day daily bar may not be finalized
-    # yet even right after close, but the latest quote will be.
-    from datetime import timedelta
-    daily_bars = get_daily_bars_cached(WATCHLIST, start=datetime.now() - timedelta(days=10), end=datetime.now())
-    try:
-        last_trade_prices = get_latest_trade_prices(WATCHLIST)
-    except Exception:
-        last_trade_prices = {}
+    # Market context. Live: prior daily close vs the latest trade price --
+    # a same-day daily bar may not be finalized right after the close, but
+    # the last trade always is. Backfill: that session's close vs the one
+    # before it, both settled history.
+    if backfill:
+        last_trade_prices = {t: c for t, c in closes_on_day.items() if c is not None}
+    else:
+        try:
+            last_trade_prices = get_latest_trade_prices(WATCHLIST)
+        except Exception:
+            last_trade_prices = {}
 
     watchlist_moves = []
     for ticker in WATCHLIST:
         bars = daily_bars.get(ticker)
         if bars is None or bars.empty:
             continue
-        prior_close = float(bars["close"].iloc[-1])
+        if backfill:
+            prior = bars[bars.index.date < datetime.fromisoformat(day).date()]
+            if prior.empty:
+                continue
+            prior_close = float(prior["close"].iloc[-1])
+        else:
+            prior_close = float(bars["close"].iloc[-1])
         last_price = last_trade_prices.get(ticker)
         if not last_price:
             continue
@@ -218,8 +375,9 @@ def gather() -> dict:
     watchlist_moves.sort(key=lambda m: m["pct_change"] if m["pct_change"] is not None else float("-inf"), reverse=True)
 
     data = {
-        "date": today,
+        "date": day,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "backfilled": backfill,
         "account": {
             "equity": account.equity,
             "today_pnl": account.today_pnl,
@@ -236,7 +394,7 @@ def gather() -> dict:
         "benchmark": benchmark,
     }
 
-    work_dir = WORK_DIR / today
+    work_dir = WORK_DIR / day
     work_dir.mkdir(parents=True, exist_ok=True)
     with open(work_dir / "data.json", "w") as f:
         json.dump(data, f, indent=2, default=str)
@@ -253,14 +411,20 @@ def _build_charts(data: dict, work_dir: Path) -> None:
 
     moves = [m for m in data["watchlist_moves"] if m.get("pct_change") is not None]
     if moves:
+        # The watchlist is 500+ names since 2026-08-05; a bar per ticker
+        # would be an unreadable smear. Show the extremes, which is what
+        # the chart is for -- the full list stays in data.json.
+        if len(moves) > 30:
+            moves = moves[:15] + moves[-15:]
         fig, ax = plt.subplots(figsize=(8, max(3, len(moves) * 0.35)))
         tickers = [m["ticker"] for m in moves]
         pcts = [m["pct_change"] for m in moves]
         colors = ["#2e7d32" if p >= 0 else "#c62828" for p in pcts]
         ax.barh(tickers, pcts, color=colors)
         ax.axvline(0, color="black", linewidth=0.8)
-        ax.set_xlabel("% change (last price vs prior close)")
-        ax.set_title("Watchlist daily movement")
+        ax.set_xlabel("% change vs prior close")
+        ax.set_title("Watchlist movement — biggest gainers and losers"
+                     if len(data["watchlist_moves"]) > 30 else "Watchlist daily movement")
         fig.tight_layout()
         fig.savefig(work_dir / "watchlist_moves.png", dpi=150)
         plt.close(fig)
@@ -280,16 +444,16 @@ def _build_charts(data: dict, work_dir: Path) -> None:
         plt.close(fig)
 
 
-def build(narrative_path: str) -> Path:
-    today = _today_str()
-    work_dir = WORK_DIR / today
+def build(narrative_path: str, day: str | None = None) -> Path:
+    day = day or _today_str()
+    work_dir = WORK_DIR / day
     with open(work_dir / "data.json") as f:
         data = json.load(f)
     with open(narrative_path) as f:
         narrative = json.load(f)
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = REPORTS_DIR / f"daily_review_{today}.pdf"
+    out_path = REPORTS_DIR / f"daily_review_{day}.pdf"
     _render_pdf(data, narrative, work_dir, out_path)
     return out_path
 
@@ -455,16 +619,19 @@ def _render_pdf(data: dict, narrative: dict, work_dir: Path, out_path: Path) -> 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] not in ("gather", "build"):
-        print("Usage: python daily_review.py gather | build --narrative <path>")
+        print("Usage: python daily_review.py gather [--date YYYY-MM-DD]")
+        print("       python daily_review.py build --narrative <path> [--date YYYY-MM-DD]")
         sys.exit(1)
 
+    day = sys.argv[sys.argv.index("--date") + 1] if "--date" in sys.argv else None
+
     if sys.argv[1] == "gather":
-        result = gather()
+        result = gather(day)
         print(json.dumps(result, indent=2, default=str))
     else:
         if "--narrative" not in sys.argv:
             print("build requires --narrative <path-to-json>")
             sys.exit(1)
         narrative_path = sys.argv[sys.argv.index("--narrative") + 1]
-        out = build(narrative_path)
+        out = build(narrative_path, day)
         print(f"Report saved to {out}")
