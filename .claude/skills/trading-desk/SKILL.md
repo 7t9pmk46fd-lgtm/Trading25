@@ -68,7 +68,7 @@ asks. Its code is recoverable from git commit `036d8ce`.
 
 | Task | When | What |
 |---|---|---|
-| `TradingDeskMarketLoop` (Windows) | weekdays 8:20 AM CT | full-session loop: swing scan once/day (Mon–Wed after 9:45 ET) + trail_stops every 15 min; paper guard + instance lock. Skips a swing scan already logged today, so a mid-session restart is safe |
+| `TradingDeskMarketLoop` (Windows) | weekdays 8:20 AM CT | full-session loop: swing scan once/day (every weekday after 9:45 ET) + trail_stops every 15 min; paper guard + instance lock. Skips a swing scan already logged today, so a mid-session restart is safe |
 | `TradingDeskDashboard` (Windows) | at logon | read-only dashboard :8787 |
 | `TradingDeskICloudMirror` (Windows) | every 15 min | robocopy /MIR to iCloud |
 | `trading-desk-daily-review` (Claude) | weekdays 3:15 PM CT | gather → narrative → PDF in Reports/ |

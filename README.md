@@ -87,9 +87,9 @@ per-trade human approval:
 
 - waits for the open using **Alpaca's market clock** (holidays and early
   closes handled by the broker, not local weekday math);
-- once per day at/after 9:45 ET, Mon–Wed (preserving the old daily-cycle
-  schedule): swing mean-reversion scan → live execution → reconciliation.
-  A restart mid-session won't repeat it — the loop checks its own log;
+- once per day at/after 9:45 ET, every weekday: swing mean-reversion scan
+  → live execution → reconciliation. A restart mid-session won't repeat
+  it — the loop checks its own log;
 - every 15 minutes until close: `trail_stops` (stop ratcheting + DAY→GTC
   conversion);
 - after close: final reconciliation, then exits until the next morning.

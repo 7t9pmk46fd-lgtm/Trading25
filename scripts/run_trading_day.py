@@ -8,10 +8,9 @@ closes handled by the broker, not local weekday math):
 
   - Before the open: sleeps until the market opens (or exits immediately
     if the next open is more than ~12h away, e.g. weekend starts).
-  - Once per day, at/after 09:45 ET on Mon-Wed only: the swing
+  - Once per day, at/after 09:45 ET on any weekday: the swing
     mean-reversion cycle (signal scan -> live risk-gated execution ->
-    reconciliation). Mon-Wed preserves the schedule the old daily task
-    deliberately used.
+    reconciliation).
   - Every 15 minutes while the market is open: trail_stops across every
     account (stop raising + DAY->GTC conversion).
   - After the close: one final reconciliation pass, then exits. The
@@ -57,7 +56,14 @@ from execution.trail_stops import check_and_trail
 
 ET = ZoneInfo("America/New_York")
 CYCLE_SECONDS = 15 * 60
-SWING_SCAN_WEEKDAYS = (0, 1, 2)   # Mon-Wed, matching the old TradingDeskDailyCycle schedule
+# Mon-Fri. Was Mon-Wed, inherited from the retired TradingDeskDailyCycle
+# task; widened 2026-08-06 at the user's request. There was never a
+# strategy reason for skipping Thu/Fri -- a daily mean-reversion signal is
+# equally valid on any session -- and with a 522-name universe and ranked
+# entries, two skipped days a week is two days of the best candidates
+# going untaken. Weekends are not listed because the market is closed;
+# the loop's Alpaca-clock check would exit before reaching this anyway.
+SWING_SCAN_WEEKDAYS = (0, 1, 2, 3, 4)
 SWING_SCAN_AFTER_ET = (9, 45)     # don't scan on the opening print
 MAX_WAIT_FOR_OPEN_HOURS = 12      # started on a weekend/holiday evening? just exit
 LOG_PATH = ROOT / "data" / "trading_day_log.jsonl"
