@@ -123,10 +123,15 @@ def _db_section():
             """SELECT o.*, s.strategy FROM orders o LEFT JOIN signals s ON o.signal_id = s.id
                WHERE date(o.submitted_at) = ? ORDER BY o.submitted_at DESC""", (today,)
         ).fetchall()]
+        # Status-gated, not filled_at-gated (2026-08-10) -- see
+        # shared.db.get_unreconciled_orders for why: Alpaca sets filled_at
+        # on the first PARTIAL fill too, so a filled_at-based check stops
+        # watching an order the moment any portion fills, even though
+        # 'partially_filled' isn't done.
         unreconciled = [dict(r) for r in conn.execute(
             """SELECT o.id, o.ticker, o.side, o.qty, o.submitted_at, o.status FROM orders o
-               WHERE o.alpaca_order_id IS NOT NULL AND o.filled_at IS NULL
-               AND o.status NOT IN ('canceled', 'replaced', 'expired', 'rejected')
+               WHERE o.alpaca_order_id IS NOT NULL
+               AND o.status NOT IN ('filled', 'canceled', 'replaced', 'expired', 'rejected')
                AND o.submitted_at < datetime('now', '-1 hour')"""
         ).fetchall()]
         rejected_recent = [dict(r) for r in conn.execute(
@@ -214,10 +219,10 @@ def _readiness_section():
             add("edge", "Beats benchmark out-of-sample", 30, 0.0,
                 "no walk-forward result on record — run signals/backtest/walk_forward.py")
 
-        # 4. Reconciliation integrity.
+        # 4. Reconciliation integrity. Status-gated, see note above.
         stale = conn.execute(
-            """SELECT COUNT(*) c FROM orders WHERE alpaca_order_id IS NOT NULL AND filled_at IS NULL
-               AND status NOT IN ('canceled','replaced','expired','rejected')
+            """SELECT COUNT(*) c FROM orders WHERE alpaca_order_id IS NOT NULL
+               AND status NOT IN ('filled','canceled','replaced','expired','rejected')
                AND submitted_at < datetime('now','-1 hour')"""
         ).fetchone()["c"]
         add("reconciliation", "Order reconciliation clean", 5, 1.0 if stale == 0 else 0.0,
@@ -279,27 +284,46 @@ def _readiness_section():
         f"{len(test_files)} test file(s)" if test_files else
         "none — every bug so far was found in production, not by a test")
 
-    # 7. Realized P&L attribution.
+    # 7. Realized P&L attribution. A behavioral self-test, not source-text
+    # matching -- an earlier version grepped risk.py for a literal
+    # "return 0.0" to detect the old placeholder, which is exactly the
+    # kind of check that breaks the moment the real implementation's own
+    # docstring mentions what it replaced (which it does, discussing its
+    # own history) -- string-matching code by what it says, not what it
+    # does, was never going to be robust. This instead runs
+    # get_today_realized_pnl against a throwaway in-memory DB seeded with
+    # one known buy/sell pair and checks the answer is numerically right.
     try:
-        risk_src = (ROOT / "shared" / "risk.py").read_text()
-        placeholder = "return 0.0" in risk_src.split("def get_today_realized_pnl")[1][:900]
-    except Exception:
-        placeholder = True
-    add("pnl", "Realized P&L attribution", 10, 0.0 if placeholder else 1.0,
-        "get_today_realized_pnl() is still a placeholder returning 0.0 — the circuit breaker "
-        "runs on Alpaca equity instead, and per-trade P&L is not attributed"
-        if placeholder else "realized P&L computed from fills")
+        import sqlite3 as _sqlite3
+        _test_conn = _sqlite3.connect(":memory:")
+        _test_conn.row_factory = _sqlite3.Row
+        _test_conn.execute("CREATE TABLE orders (ticker TEXT, side TEXT, qty REAL, fill_price REAL, filled_at TEXT, filled_qty REAL)")
+        _today_str = datetime.now().strftime("%Y-%m-%d")
+        _test_conn.execute("INSERT INTO orders VALUES ('TEST','buy',10,100.0,?,10)", (f"{_today_str} 09:30:00",))
+        _test_conn.execute("INSERT INTO orders VALUES ('TEST','sell',10,110.0,?,10)", (f"{_today_str} 15:00:00",))
+        from shared.risk import get_today_realized_pnl
+        _result = get_today_realized_pnl(_test_conn)
+        pnl_correct = abs(_result - 100.0) < 0.01  # 10 shares * ($110-$100) = $100, exactly
+        pnl_detail = (f"self-test: 10sh bought @$100 sold @$110 today -> computed ${_result:,.2f} "
+                     f"(expected $100.00)" if pnl_correct else
+                     f"self-test FAILED: expected $100.00, got ${_result:,.2f}")
+    except Exception as e:
+        pnl_correct = False
+        pnl_detail = f"self-test errored: {type(e).__name__}: {e}"
+    add("pnl", "Realized P&L attribution", 10, 1.0 if pnl_correct else 0.0, pnl_detail)
 
     # 8. Risk controls present in code.
     try:
         exec_src = (ROOT / "execution" / "run_execution_loop.py").read_text()
         loop_src = (ROOT / "scripts" / "run_trading_day.py").read_text()
         cfg_src = (ROOT / "shared" / "config.py").read_text()
+        risk_src = (ROOT / "shared" / "risk.py").read_text()
         guards = {
             "oversell guard": "refusing to sell" in exec_src,
             "stop required on buys": "no stop_price set" in exec_src,
             "paper-only guard": "ALPACA_PAPER" in loop_src and "refused_to_start" in loop_src,
             "position ceiling": "MAX_CONCURRENT_POSITIONS" in cfg_src,
+            "cash-floor guard": "check_cash_floor" in exec_src and "check_cash_floor" in risk_src,
         }
     except Exception:
         guards = {}

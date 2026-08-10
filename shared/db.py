@@ -45,7 +45,10 @@ CREATE TABLE IF NOT EXISTS orders (
     signal_id       INTEGER REFERENCES signals(id),
     ticker          TEXT NOT NULL,
     side            TEXT NOT NULL CHECK(side IN ('buy', 'sell')),
-    qty             REAL NOT NULL,
+    qty             REAL NOT NULL,       -- ORDERED qty, set at submission. For a
+                                         -- partially_filled order this is NOT
+                                         -- the amount that actually filled --
+                                         -- see filled_qty below.
     order_type      TEXT NOT NULL DEFAULT 'market',
     alpaca_order_id TEXT,               -- Alpaca's own order id, for reconciliation
     status          TEXT NOT NULL DEFAULT 'submitted',
@@ -53,6 +56,18 @@ CREATE TABLE IF NOT EXISTS orders (
     submitted_at    TEXT NOT NULL DEFAULT (datetime('now')),
     filled_at       TEXT,
     fill_price      REAL,
+    filled_qty      REAL,               -- Added 2026-08-10, populated by
+                                         -- reconcile_orders from Alpaca's own
+                                         -- record. NULL for orders reconciled
+                                         -- before this column existed, and for
+                                         -- anything still unreconciled -- callers
+                                         -- that need "how much actually filled"
+                                         -- should COALESCE(filled_qty, qty) and
+                                         -- treat the fallback as approximate.
+                                         -- Confirmed to matter for real: AMD's
+                                         -- 2026-08-04 sell recorded qty=13 (the
+                                         -- order placed) while Alpaca had only
+                                         -- filled 11 -- a gap `qty` alone can't see.
     notes           TEXT
 );
 
@@ -114,12 +129,40 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    # Table may already exist from before a column was added to SCHEMA --
+    # CREATE TABLE IF NOT EXISTS alone would never pick that up. Run on
+    # every connection (not just init_db()) since most callers go straight
+    # to db_session() and never call init_db() explicitly. _migrate no-ops
+    # if `orders` doesn't exist yet, so this is safe on a brand-new DB too.
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight schema migrations for columns added after the DB file
+    already existed. CREATE TABLE IF NOT EXISTS (in SCHEMA) never alters an
+    existing table, so a new column needs an explicit, idempotent
+    ALTER TABLE here. No-ops entirely if `orders` doesn't exist yet (a
+    brand-new DB, about to get the full current schema from SCHEMA
+    instead) -- ALTER TABLE ADD COLUMN has no IF NOT EXISTS form in
+    SQLite, and PRAGMA table_info on a missing table just returns nothing,
+    so check sqlite_master first rather than let ALTER fail on a table
+    that was never created."""
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='orders'"
+    ).fetchone()
+    if not table_exists:
+        return
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(orders)").fetchall()}
+    if "filled_qty" not in existing:
+        conn.execute("ALTER TABLE orders ADD COLUMN filled_qty REAL")
+        conn.commit()
 
 
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager
@@ -187,19 +230,32 @@ def insert_research_note(
 
 
 def get_unreconciled_orders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Orders that have an Alpaca order id but haven't been recorded as
-    filled locally yet -- candidates for reconciliation against Alpaca's
-    own order status. Includes the originating strategy (joined from
-    signals) so callers can route the lookup to the right Alpaca account
-    via shared.config.account_for_strategy -- an order id is only valid
-    against the account it was actually submitted to."""
+    """Orders not yet in a TERMINAL state locally -- candidates for
+    reconciliation against Alpaca's own order status. Includes the
+    originating strategy (joined from signals) so callers can route the
+    lookup to the right Alpaca account via shared.config.account_for_strategy
+    -- an order id is only valid against the account it was actually
+    submitted to.
+
+    Gates on status, not `filled_at IS NULL` (changed 2026-08-10). Alpaca
+    sets filled_at on the FIRST partial fill, not only on full completion
+    -- a 'partially_filled' order already has a non-null filled_at, so the
+    old filled_at-based check dropped it from this list the moment ANY
+    portion filled and never looked at it again, permanently missing
+    later fills of the remainder. Confirmed for real: AMD's 2026-08-04
+    sell was recorded partially_filled at 11/13 shares and stayed that
+    way in the local ledger for six days, even though Alpaca had it fully
+    filled at 13/13 within the same session -- caught only by a manual
+    one-off re-check, not by this function. 'filled' is the only status
+    that means truly done; every other non-terminal status still needs a
+    look."""
     return conn.execute(
         """
         SELECT o.*, s.strategy AS strategy
         FROM orders o
         LEFT JOIN signals s ON o.signal_id = s.id
-        WHERE o.alpaca_order_id IS NOT NULL AND o.filled_at IS NULL
-          AND o.status NOT IN ('canceled', 'replaced', 'expired', 'rejected')
+        WHERE o.alpaca_order_id IS NOT NULL
+          AND o.status NOT IN ('filled', 'canceled', 'replaced', 'expired', 'rejected')
         """
     ).fetchall()
 
@@ -210,10 +266,16 @@ def update_order_fill(
     status: str,
     filled_at: str | None,
     fill_price: float | None,
+    filled_qty: float | None = None,
 ) -> None:
+    """filled_qty added 2026-08-10 -- optional so existing callers that
+    don't pass it (there were none, but keep the signature backward
+    compatible) don't break. Always pass it going forward; `qty` alone is
+    the ordered amount and can silently diverge from what actually filled
+    on a partial fill (confirmed for real on AMD's 2026-08-04 sell)."""
     conn.execute(
-        "UPDATE orders SET status = ?, filled_at = ?, fill_price = ? WHERE alpaca_order_id = ?",
-        (status, filled_at, fill_price, alpaca_order_id),
+        "UPDATE orders SET status = ?, filled_at = ?, fill_price = ?, filled_qty = ? WHERE alpaca_order_id = ?",
+        (status, filled_at, fill_price, filled_qty, alpaca_order_id),
     )
 
 

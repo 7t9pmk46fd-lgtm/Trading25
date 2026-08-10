@@ -23,17 +23,34 @@ from shared.config import account_for_strategy
 
 
 def reconcile() -> list[dict]:
+    """
+    One order's lookup failing must never abort the rest of the batch --
+    a single bad alpaca_order_id (e.g. from a since-closed account) used
+    to be able to raise out of the loop and silently skip reconciling
+    every order queued after it, including live ones. Each order is now
+    isolated in its own try/except, same pattern as run_execution_loop's
+    per-signal isolation.
+    """
     results = []
     with db.db_session() as conn:
         for order in db.get_unreconciled_orders(conn):
             acct = account_for_strategy(order["strategy"])
-            status = alpaca_client.get_order_status(order["alpaca_order_id"], account=acct)
+            try:
+                status = alpaca_client.get_order_status(order["alpaca_order_id"], account=acct)
+            except Exception as e:
+                results.append({
+                    "order_id": order["id"], "ticker": order["ticker"],
+                    "alpaca_order_id": order["alpaca_order_id"],
+                    "status": "error", "error": f"{type(e).__name__}: {e}",
+                })
+                continue
             db.update_order_fill(
                 conn,
                 alpaca_order_id=status["alpaca_order_id"],
                 status=status["status"],
                 filled_at=status["filled_at"],
                 fill_price=status["filled_avg_price"],
+                filled_qty=status["filled_qty"],
             )
             results.append({
                 "order_id": order["id"],

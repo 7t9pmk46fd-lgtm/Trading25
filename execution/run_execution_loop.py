@@ -17,8 +17,29 @@ counter is a supplementary check.
 
 A signal that fails a risk check is marked 'rejected' with a reason, not
 silently dropped -- so you can see what got blocked and why.
+
+Buy protection (2026-08-10 rewrite): buys used to go through Alpaca's OTO
+bracket order (submit_market_order_with_stop) so the stop armed atomically
+once the buy filled. That mechanism is retired -- Alpaca's bracket child
+leg permanently inherits the parent's DAY time_in_force, and confirmed in
+production (2026-07-27 through 2026-08-10) it can no longer even be
+converted afterward ("time_in_force cannot be changed for advanced
+orders"). Every fresh entry was landing with a stop that silently expired
+at that day's close, requiring trail_stops to notice and re-place it the
+next morning -- a real, growing gap as the position count scaled up.
+
+Buys now submit a plain market order, poll briefly for the fill (bounded;
+see _wait_for_fill), then place a standalone GTC stop via
+place_protective_stop() for the ACTUAL filled quantity. If the fill
+doesn't complete within the poll window, the buy still stands -- nothing
+here cancels it -- and trail_stops' existing "place an initial stop on any
+position found with none" logic remains the fallback, unchanged from
+before. The common case (a liquid name filling in low single-digit
+seconds) now gets a durable stop in the same pass a buy that used to need
+a full overnight-plus-one-cycle gap to protect.
 """
 import sys
+import time as _time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -26,6 +47,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from execution import alpaca_client
 from shared import db, risk
 from shared.config import account_for_strategy
+from shared.market_data import get_latest_trade_prices
+
+FILL_POLL_SECONDS = 20      # total time to wait for a buy to fill
+FILL_POLL_INTERVAL = 2      # seconds between polls
+
+
+def _wait_for_fill(alpaca_order_id: str, account: str) -> tuple[float, float | None]:
+    """Poll get_order_status for up to FILL_POLL_SECONDS. Returns
+    (filled_qty, filled_avg_price) -- filled_qty is 0.0 if it never filled
+    within the window (a still-working order, not an error; the caller's
+    fallback is trail_stops' next cycle, exactly as it was before this
+    function existed)."""
+    deadline = _time.monotonic() + FILL_POLL_SECONDS
+    filled_qty, filled_avg_price = 0.0, None
+    while _time.monotonic() < deadline:
+        status = alpaca_client.get_order_status(alpaca_order_id, account=account)
+        filled_qty = status.get("filled_qty") or 0.0
+        filled_avg_price = status.get("filled_avg_price")
+        if filled_qty > 0:
+            return filled_qty, filled_avg_price
+        _time.sleep(FILL_POLL_INTERVAL)
+    return filled_qty, filled_avg_price
 
 
 def process_pending_signals(dry_run: bool = True) -> list[dict]:
@@ -102,6 +145,22 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
                         f"a broker-side stop, not just a sizing assumption."
                     )
 
+                if sig["action"] == "buy":
+                    # This system does not use margin. buying_power includes
+                    # margin and was, until 2026-08-10, the only figure ever
+                    # checked -- meaning a buy could and did draw the account
+                    # cash negative with nothing here aware of it. Price the
+                    # order against a fresh quote (not the signal's stale
+                    # generation-time price) so the check reflects current cost.
+                    try:
+                        live_price = get_latest_trade_prices([sig["ticker"]])[sig["ticker"]]
+                        risk.check_cash_floor(account.cash, qty * live_price)
+                    except KeyError:
+                        raise risk.RiskViolation(
+                            f"Signal #{sig['id']}: no live quote for {sig['ticker']} -- "
+                            f"refusing to buy without being able to price the cash check."
+                        )
+
                 if sig["action"] == "sell":
                     # NEVER sell more than the broker says we hold. This system
                     # is long-only end to end: a sell exists only to close an
@@ -134,9 +193,31 @@ def process_pending_signals(dry_run: bool = True) -> list[dict]:
                 else:
                     try:
                         if sig["action"] == "buy":
-                            order = alpaca_client.submit_market_order_with_stop(
-                                sig["ticker"], qty, sig["stop_price"], account=acct
-                            )
+                            order = alpaca_client.submit_market_order(sig["ticker"], qty, "buy", account=acct)
+                            filled_qty, _ = _wait_for_fill(order["alpaca_order_id"], account=acct)
+                            if filled_qty > 0:
+                                try:
+                                    stop_order = alpaca_client.place_protective_stop(
+                                        sig["ticker"], filled_qty, sig["stop_price"], account=acct
+                                    )
+                                    outcome["stop_alpaca_order_id"] = stop_order["alpaca_order_id"]
+                                except Exception as stop_err:
+                                    # The buy already stands -- do not unwind it.
+                                    # trail_stops finds any position with no
+                                    # open stop and places one on its next
+                                    # cycle; this is that same fallback, just
+                                    # reached sooner than the old design ever
+                                    # needed to rely on it.
+                                    outcome["stop_warning"] = (
+                                        f"buy filled but protective stop failed: "
+                                        f"{type(stop_err).__name__}: {stop_err} -- "
+                                        f"trail_stops will cover it next cycle"
+                                    )
+                            else:
+                                outcome["stop_warning"] = (
+                                    f"buy not yet filled after {FILL_POLL_SECONDS}s -- "
+                                    f"trail_stops will place the initial stop once it fills"
+                                )
                         else:
                             # Clear any standing protective stop before closing
                             # the position -- otherwise it's left pointing at a

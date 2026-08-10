@@ -53,7 +53,21 @@ class AccountSnapshot:
     equity: float
     last_equity: float          # previous trading day's closing equity
     today_pnl: float            # equity - last_equity, a simple daily P&L proxy
-    buying_power: float
+    buying_power: float         # INCLUDES margin -- do not use this to decide
+                                 # whether a buy is affordable in cash terms;
+                                 # see `cash` and shared.risk.check_cash_floor.
+    cash: float                 # settled + unsettled cash, Alpaca's own figure.
+                                 # Negative means the account is carrying a
+                                 # margin debit right now (confirmed 2026-08-10:
+                                 # this account ran -$4,467 of cash while fully
+                                 # invested). Added because nothing previously
+                                 # read this at all -- sizing was 100% equity-%
+                                 # based and blind to whether a buy would push
+                                 # cash negative.
+    multiplier: int              # Alpaca's account multiplier: 1 = cash account,
+                                 # 2 = standard margin (Reg-T), 4 = PDT margin.
+                                 # >1 means margin is structurally available,
+                                 # not that it's being used -- `cash` tells you that.
     is_pdt_flagged: bool        # Alpaca's OWN pattern-day-trader flag
     daytrade_count: int         # Alpaca's OWN day-trade counter (last 5 days)
 
@@ -79,6 +93,8 @@ def get_account_snapshot(account: str = "default") -> AccountSnapshot:
         last_equity=last_equity,
         today_pnl=equity - last_equity,
         buying_power=float(account.buying_power),
+        cash=float(account.cash),
+        multiplier=int(account.multiplier or 1),
         is_pdt_flagged=bool(account.pattern_day_trader),
         daytrade_count=int(account.daytrade_count or 0),
     )
@@ -170,6 +186,18 @@ def submit_market_order(symbol: str, qty: float, side: str, account: str = "defa
 
 def submit_market_order_with_stop(symbol: str, qty: float, stop_price: float, account: str = "default") -> dict:
     """
+    RETIRED from the buy flow as of 2026-08-10 -- run_execution_loop.py no
+    longer calls this. Kept only for reference; do not wire it back in.
+    Alpaca has since gone further than the DAY-TIF problem documented
+    below: it now also refuses to convert the bracket leg's TIF after the
+    fact ("time_in_force cannot be changed for advanced orders"), so
+    trail_stops' self-heal path stopped working too -- every fresh entry
+    was landing with a stop that would expire at the close with no way to
+    fix it before then. The replacement is two plain calls:
+    submit_market_order() then place_protective_stop() once it fills (see
+    run_execution_loop.py). That produces a real GTC stop from the start,
+    no conversion required.
+
     Buy entry + a real broker-side protective stop, submitted as one OTO
     (one-triggers-other) order: the stop-loss leg only arms once the
     market buy actually fills.
@@ -222,9 +250,12 @@ def submit_market_order_with_stop(symbol: str, qty: float, stop_price: float, ac
 
 def place_protective_stop(symbol: str, qty: float, stop_price: float, account: str = "default") -> dict:
     """
-    Attaches a standalone stop-sell order to a position that's already
-    open (i.e. wasn't bought via submit_market_order_with_stop). Used to
-    retroactively protect a position, not part of the normal buy flow.
+    Attaches a standalone GTC stop-sell order to a position that's already
+    open. As of 2026-08-10 this IS the normal buy flow -- run_execution_loop
+    calls it right after a buy fills, instead of the old OTO bracket
+    (submit_market_order_with_stop, retired for this purpose -- see that
+    function's docstring for why). Also used by trail_stops as the
+    fallback for any position it finds with no stop at all.
     """
     from alpaca.trading.enums import OrderSide, TimeInForce
     from alpaca.trading.requests import StopOrderRequest

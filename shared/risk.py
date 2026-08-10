@@ -6,7 +6,7 @@ sits between "a strategy wants to trade" and "an order actually gets
 submitted," so risk rules are enforced consistently no matter which
 strategy (mean-reversion, day-trading, whatever comes next) is asking.
 
-Covers three things:
+Covers four things:
   1. PDT (Pattern Day Trader) rule enforcement -- FINRA requires accounts
      under $25,000 equity to be limited to 3 "day trades" (opening and
      closing the same position on the same day) within any rolling 5
@@ -19,6 +19,12 @@ Covers three things:
   3. Position sizing -- caps position size as a % of account equity, and
      provides stop-loss-aware sizing so a full stop-out corresponds to a
      bounded % account risk rather than an arbitrary dollar amount.
+  4. Cash floor (added 2026-08-10) -- refuses a buy that would draw the
+     account's cash negative. This system does not use margin. Sizing is
+     still purely equity-%-based (position sizing and margin usage are
+     separate concerns), so this is a backstop that catches the case
+     where equity-based sizing and actual available cash have diverged
+     (e.g. several concurrent buys, or cash tied up in unsettled trades).
 
 IMPORTANT: this module tracks state via the shared `orders` table. It is
 only as accurate as the orders actually recorded there. If orders are ever
@@ -159,19 +165,101 @@ def check_pdt_allows_trade(
 
 
 def get_today_realized_pnl(conn: sqlite3.Connection) -> float:
-    """Sum of realized P&L from orders filled today. Requires fill_price
-    to be populated and a matching entry order to compute P&L -- this is a
-    simplified placeholder; a real implementation should reconcile against
-    Alpaca's own position/activity data rather than recomputing from local
-    order records alone."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    """
+    Sum of realized P&L from round-trips CLOSED today, computed by FIFO
+    matching every filled buy/sell in the local order ledger, per ticker.
+
+    Implemented 2026-08-10, replacing a hardcoded `return 0.0` placeholder.
+    NOT wired into check_circuit_breaker -- that already uses Alpaca's own
+    account.today_pnl (equity-based, includes unrealized moves too, and is
+    the authoritative live figure). This function exists for reporting
+    (dashboard, daily review) where "what did we actually lock in today,
+    separate from paper moves on positions still held" is the useful
+    number and wasn't available anywhere before.
+
+    Method: walk every filled order across ALL history (not just today) in
+    fill order, maintaining a per-ticker FIFO queue of open buy lots. A
+    sell consumes the oldest lots first; the realized P&L on each matched
+    portion is (sell_price - buy_price) * matched_qty. Full history is
+    required to build accurate queue state even though only today's sells
+    are counted -- a sell today can close a lot bought last week.
+
+    Uses COALESCE(filled_qty, qty): filled_qty (added 2026-08-10) is the
+    broker-confirmed actual fill amount and is preferred whenever present.
+    Rows reconciled before that column existed have filled_qty = NULL and
+    fall back to qty (the ordered amount) -- exact for a full fill, an
+    overstatement for a partial one. Confirmed for real on AMD's
+    2026-08-04 sell: 13 ordered, only 11 actually filled.
+    """
     rows = conn.execute(
-        "SELECT * FROM orders WHERE date(filled_at) = ? AND fill_price IS NOT NULL",
-        (today,),
+        """SELECT ticker, side, COALESCE(filled_qty, qty) AS qty, fill_price, filled_at
+           FROM orders
+           WHERE filled_at IS NOT NULL AND fill_price IS NOT NULL
+           ORDER BY filled_at ASC"""
     ).fetchall()
-    # Placeholder: real P&L reconciliation belongs in the execution agent,
-    # which has access to Alpaca's actual position/activity records.
-    return 0.0
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    open_lots: dict[str, list[list[float]]] = {}  # ticker -> [[qty, price], ...] oldest first
+    realized_today = 0.0
+
+    for row in rows:
+        ticker, side, qty, price = row["ticker"], row["side"], row["qty"], row["fill_price"]
+        lots = open_lots.setdefault(ticker, [])
+
+        if side == "buy":
+            lots.append([qty, price])
+            continue
+
+        # side == "sell": consume oldest lots first (FIFO).
+        remaining = qty
+        is_today = str(row["filled_at"]).startswith(today)
+        while remaining > 1e-9 and lots:
+            lot_qty, lot_price = lots[0]
+            matched = min(remaining, lot_qty)
+            if is_today:
+                realized_today += matched * (price - lot_price)
+            lot_qty -= matched
+            remaining -= matched
+            if lot_qty <= 1e-9:
+                lots.pop(0)
+            else:
+                lots[0][0] = lot_qty
+        # A sell with no matching lot (shouldn't happen -- the oversell
+        # guard prevents it going forward) is silently ignored rather than
+        # raising, since this function serves reporting, not a live gate.
+
+    return realized_today
+
+
+def check_cash_floor(cash: float, order_cost: float, cash_floor: float = 0.0) -> None:
+    """
+    Raises RiskViolation if a buy would push settled cash below `cash_floor`
+    (default: $0 -- no margin debit at all).
+
+    Added 2026-08-10. Before this, no risk check anywhere read the
+    account's cash balance -- compute_position_size sizes purely off a %
+    of equity, and Alpaca's buying_power (which the account had plenty of)
+    already includes margin, so a buy would happily execute using
+    borrowed money with nothing in this codebase aware it had happened.
+    Confirmed on the live paper account: cash was -$4,467.25 while fully
+    invested, with no code path that tracks margin interest, monitors
+    maintenance-margin health, or has any repayment plan -- a real gap for
+    a system that might someday run real money. This is the minimum fix:
+    refuse the buy outright rather than silently draw on margin. It does
+    not, by itself, make margin usage safe to enable -- see shared/risk.py
+    module docstring and execution/SKILL.md for what's still missing
+    (margin-call awareness, interest tracking) if that's ever revisited.
+
+    order_cost: qty * entry_price for the buy being evaluated, i.e. the
+    cash this specific order would consume if filled at that price.
+    """
+    if cash - order_cost < cash_floor:
+        raise RiskViolation(
+            f"Buy would use margin: cash is ${cash:,.2f}, this order costs "
+            f"${order_cost:,.2f}, leaving ${cash - order_cost:,.2f} -- below "
+            f"the ${cash_floor:,.2f} floor. This system does not use margin; "
+            f"refusing rather than silently drawing on it."
+        )
 
 
 def check_circuit_breaker(conn: sqlite3.Connection, limits: RiskLimits, current_daily_pnl: float) -> None:
