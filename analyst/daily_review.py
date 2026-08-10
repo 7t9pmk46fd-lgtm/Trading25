@@ -404,6 +404,53 @@ def gather(day: str | None = None) -> dict:
     return data
 
 
+def summarize(data: dict, movers: int = 8) -> dict:
+    """Compact digest of a session, for an agent to read.
+
+    `gather` used to print its entire payload to stdout -- 85,000
+    characters (~21k tokens) per run, ~60% of it the 500+ entry
+    watchlist_moves array. A narrative only ever cites the extremes, so
+    shipping every ticker's daily move into an agent's context burned
+    usage on every scheduled review for no gain. The full payload still
+    goes to data.json on disk, which is what `build` reads.
+    """
+    moves = [m for m in data.get("watchlist_moves", []) if m.get("pct_change") is not None]
+    counts: dict[str, int] = {}
+    for e in data.get("stop_events", []):
+        counts[e.get("status", "?")] = counts.get(e.get("status", "?"), 0) + 1
+
+    bench = (data.get("benchmark") or {}).get("default") or {}
+    return {
+        "date": data.get("date"),
+        "backfilled": data.get("backfilled", False),
+        "account": data.get("account", {}),
+        "benchmark": {k: bench.get(k) for k in
+                      ("portfolio_return_pct", "benchmark_return_pct", "alpha_pct")} if bench else None,
+        "positions": [
+            {"symbol": p["symbol"], "qty": p["qty"], "entry": round(p["avg_entry_price"], 2),
+             "now": round(p["current_price"], 2), "pl": round(p["unrealized_pl"], 2)}
+            for p in data.get("open_positions", [])
+        ],
+        "signals_today": [
+            {"ticker": s["ticker"], "action": s["action"], "status": s["status"],
+             "qty": s.get("qty"), "why": (s.get("reasoning") or "")[:70]}
+            for s in data.get("signals_today", [])
+        ],
+        "orders_today": [
+            {"ticker": o["ticker"], "side": o["side"], "qty": o["qty"],
+             "status": o["status"], "fill": o.get("fill_price")}
+            for o in data.get("orders_today", [])
+        ],
+        "errors": data.get("errors", []),
+        "stop_event_counts": counts,
+        "top_movers": [{"t": m["ticker"], "pct": round(m["pct_change"], 2)} for m in moves[:movers]],
+        "worst_movers": [{"t": m["ticker"], "pct": round(m["pct_change"], 2)} for m in moves[-movers:]],
+        "watchlist_size": len(data.get("watchlist_moves", [])),
+        "cycle_run_counts": data.get("cycle_run_counts", {}),
+        "note": "Compact digest. Full payload at data/daily_review_work/<date>/data.json.",
+    }
+
+
 def _build_charts(data: dict, work_dir: Path) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -627,7 +674,13 @@ if __name__ == "__main__":
 
     if sys.argv[1] == "gather":
         result = gather(day)
-        print(json.dumps(result, indent=2, default=str))
+        # Compact by default -- see summarize(). --full restores the old
+        # complete dump for debugging, but never use it in a scheduled
+        # task: it is ~21k tokens a run.
+        if "--full" in sys.argv:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            print(json.dumps(summarize(result), indent=2, default=str))
     else:
         if "--narrative" not in sys.argv:
             print("build requires --narrative <path-to-json>")

@@ -13,10 +13,14 @@ rules, market data). `mcp_server.py` exposes read-only/simulation MCP
 tools. **One** Alpaca paper account: `default`, running the swing
 mean-reversion strategy. Credentials in gitignored `.env`.
 
-One live strategy: `rd_mean_reversion` (swing, daily bars), scanning a
-57-name sector-diversified universe, max 20 concurrent positions at 5%
-of equity each. **Long-only** — short selling was tested and rejected
-(-22.4% short sleeve); see `signals/SKILL.md`.
+One live strategy: `rd_mean_reversion` (swing, daily bars), scanning an
+index-scale universe (S&P 500 + NASDAQ-100 + Dow 30 union, ~522 tradeable
+names as of 2026-08-04, see `data/universe.json` / `scripts/build_universe.py`),
+ranked by z-score so the strongest signals fill the position cap first
+(not ticker-alphabetical). Max 20 concurrent positions at 5% of equity
+each. Scans every weekday (widened from Mon-Wed 2026-08-06). **Long-only**
+— short selling was tested and rejected (-22.4% short sleeve); see
+`signals/SKILL.md`.
 
 An intraday strategy was removed entirely on 2026-08-03 along with its
 paper account. Do not reintroduce it or its scaffolding unless the user
