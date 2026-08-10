@@ -67,17 +67,46 @@ asks. Its code is recoverable from git commit `036d8ce`.
 - **Backtest results are not evidence for a parameter change.** Walk-
   forward showed re-tuning underperforms leaving parameters alone. A new
   *hypothesis* needs its own walk-forward written before it goes live.
+  A trend filter was tried and rejected the same way 2026-08-10 (see
+  `signals/SKILL.md`) -- the discipline held on the second attempt too.
+- **This system does not use margin.** `shared.risk.check_cash_floor`
+  (added 2026-08-10) refuses any buy that would push cash below $0 --
+  the account had been running negative cash with nothing checking it.
+  Do not weaken or bypass this without the user explicitly re-opening the
+  margin question (they asked about it directly on 2026-08-10; the
+  answer given was "not without real engineering," which this guard is
+  the first piece of, not the whole answer -- margin-call awareness and
+  interest tracking are still missing if that's ever revisited).
+- **Buys no longer use Alpaca's OTO bracket order** (retired 2026-08-10 --
+  the child stop leg permanently inherited DAY time_in_force and Alpaca
+  stopped allowing it to be converted afterward). A buy now submits
+  plain, polls briefly for the fill, then places a standalone GTC stop.
+  Do not reintroduce `submit_market_order_with_stop` into the buy path.
+- **A test suite exists** (`tests/`, pytest, 49 tests as of 2026-08-10).
+  Run it (`pytest tests/`) after touching `shared/risk.py`,
+  `execution/run_execution_loop.py`, or the mean-reversion screener --
+  every test targets a specific past production bug, not generic
+  coverage, so a break here means something that already happened once
+  is about to happen again.
 
 ## Automation roster (don't double-run these by hand)
 
 | Task | When | What |
 |---|---|---|
 | `TradingDeskMarketLoop` (Windows) | weekdays 8:20 AM CT | full-session loop: swing scan once/day (every weekday after 9:45 ET) + trail_stops every 15 min; paper guard + instance lock. Skips a swing scan already logged today, so a mid-session restart is safe |
-| `TradingDeskDashboard` (Windows) | at logon | read-only dashboard :8787 |
-| `TradingDeskICloudMirror` (Windows) | every 15 min | robocopy /MIR to iCloud |
 | `trading-desk-daily-review` (Claude) | weekdays 3:15 PM CT | gather → narrative → PDF in Reports/ |
 | `trading-desk-nightly-rd` (Claude) | weekdays 5:30 PM CT | operational health check. **Barred from proposing parameter changes** — walk-forward proved that inference is noise |
 | `trading-desk-weekly-rd` (Claude) | Sat 10 AM CT | weekly synthesis report |
+
+**Dashboard is manual-start only** (as of 2026-08-10, at the user's
+request -- the logon auto-start task popped a visible console window
+every login and was disabled, not deleted: `schtasks /query /tn
+TradingDeskDashboard` shows `Scheduled Task State: Disabled`). Start it
+with `venv/Scripts/python analyst/dashboard.py` when needed; don't
+re-enable the logon trigger without asking. **iCloud auto-mirror task
+was deleted outright by the user the same day** (they mirror manually).
+Still run `scripts/mirror_to_icloud.bat` after any file change per the
+rule above -- there is no longer a scheduled safety net if you forget.
 
 ## Where things live
 

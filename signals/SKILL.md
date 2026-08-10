@@ -8,6 +8,49 @@ order. Signals are written to the shared `signals` table and only
 
 ## Strategies
 
+### ⚠ Trend filter hypothesis tested and REJECTED (2026-08-10)
+
+`backtest/trend_filter_test.py`. Rather than re-tune entry_z/exit_z again
+(already proven to fit noise, below) or short (already proven to lose
+money, below), this tested a genuinely different mechanism: only take
+`enter_long` when price is at/above its own 100-day SMA -- buying a
+short-term dip WITHIN a longer-term uptrend, not any statistically
+oversold bar regardless of context. `MeanReversionParams.trend_filter_days`
+implements it, default `None` (verified byte-identical to no filter via
+`tests/test_mean_reversion.py::test_trend_filter_none_is_byte_identical`).
+One SMA length (100 days) was fixed BEFORE running, by convention, not
+selected by trying several and keeping the best -- that selection process
+is exactly the trap the walk-forward result below already demonstrated.
+
+Same live entry_z/exit_z/lookback in both arms, same 2022-08-04 to
+2026-07-30 window, current 522-name universe:
+
+| | Total | Sharpe | Max DD | Trades |
+|---|---|---|---|---|
+| Unfiltered (== live) | +26.5% | 0.75 | -8.2% | 13,724 |
+| Trend-filtered (SMA100) | **+9.0%** | 0.77 | -2.7% | 5,276 |
+| SPY buy-and-hold | +76.1% | 0.96 | — | — |
+
+**Verdict: the filter does not improve on the unfiltered signal --
++9.0% vs +26.5%, roughly a third of the return, for a flat Sharpe. Do not
+adopt.** It does cut max drawdown substantially (-2.7% vs -8.2%), which
+is a real effect, not nothing -- but it comes from taking 62% fewer
+trades, and the return given up is larger than the risk saved by the
+usual risk-adjusted measures. Live default (`trend_filter_days=None`)
+stays unchanged.
+
+Caveat worth flagging explicitly: the unfiltered arm's +26.5% here does
+NOT match the +49.5% `mean_reversion_fixed_oos` figure from the
+2026-08-03 walk-forward, because this test ran on the CURRENT 522-name
+universe (post index-scale expansion) while that figure used the
+~57-name universe in place at the time -- same window, different
+universe, not a contradiction. The A-vs-B comparison within this test
+is still apples-to-apples (identical universe, identical window, only
+the filter differs), which is what the verdict rests on. Read as a
+second data point: even the broader universe with the current fixed
+params (the unfiltered arm) trails SPY by more, not less, than the
+original 57-name result did.
+
 ### ⚠ Short selling was tested and REJECTED (2026-08-03)
 
 `backtest/short_side_test.py`. The screener has always supported shorts

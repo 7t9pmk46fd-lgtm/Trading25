@@ -109,6 +109,61 @@ def test_latest_signal_returns_none_on_empty_dataframe():
     assert latest_signal(df) is None
 
 
+def test_trend_filter_none_is_byte_identical_to_no_filter():
+    """trend_filter_days=None (the default, and what every live signal
+    uses) must produce IDENTICAL output to before the field existed. This
+    pins that contract so the 2026-08-10 trend-filter hypothesis can never
+    silently change live behavior -- only an explicit, deliberate
+    trend_filter_days=N opts into the new code path."""
+    df = _flat_then_dip_then_recover()
+    baseline = generate_signals(df, MeanReversionParams())
+    explicit_none = generate_signals(df, MeanReversionParams(trend_filter_days=None))
+    pd.testing.assert_frame_equal(baseline, explicit_none)
+
+
+def test_trend_filter_blocks_entry_when_price_below_long_term_average():
+    # Price sits well below its own 100-day average for the whole series
+    # (a structural downtrend), then has a short-term dip-and-recover on
+    # top of that -- the exact "falling knife" case the filter exists to
+    # exclude. Long history of decline (dragging the SMA down with price,
+    # but staying above the dip low) plus a dip near the end.
+    n = 120
+    decline = [200.0 - i * 0.8 for i in range(n)]       # steady downtrend
+    dip = [decline[-1] - 5.0] * 3
+    closes = decline + dip
+    idx = pd.date_range("2026-01-01", periods=len(closes), freq="D")
+    df = pd.DataFrame({"close": closes, "volume": [1_000_000] * len(closes)}, index=idx)
+
+    unfiltered = generate_signals(df, MeanReversionParams(lookback=20, entry_z=-1.0, trend_filter_days=None))
+    filtered = generate_signals(df, MeanReversionParams(lookback=20, entry_z=-1.0, trend_filter_days=100))
+
+    assert "enter_long" in unfiltered["signal"].values   # confirms the dip alone WOULD trigger
+    assert "enter_long" not in filtered["signal"].values  # but the trend filter blocks it
+
+
+def test_trend_filter_allows_entry_within_an_uptrend():
+    # Steady uptrend, then a short-term dip-and-recover -- the case the
+    # filter is supposed to keep letting through.
+    n = 120
+    uptrend = [100.0 + i * 0.5 for i in range(n)]
+    dip = [uptrend[-1] - 8.0] * 3
+    recover = [uptrend[-1]] * 5
+    closes = uptrend + dip + recover
+    idx = pd.date_range("2026-01-01", periods=len(closes), freq="D")
+    df = pd.DataFrame({"close": closes, "volume": [1_000_000] * len(closes)}, index=idx)
+
+    filtered = generate_signals(df, MeanReversionParams(lookback=20, entry_z=-1.0, trend_filter_days=100))
+    assert "enter_long" in filtered["signal"].values
+
+
+def test_trend_filter_refuses_rather_than_guesses_before_warmup():
+    # Fewer bars than trend_filter_days -- SMA is NaN throughout, and the
+    # filter must fail closed (no entries), not silently pass everything.
+    df = _flat_then_dip_then_recover(n_flat=25)  # 33 bars total
+    filtered = generate_signals(df, MeanReversionParams(lookback=20, entry_z=-1.5, trend_filter_days=100))
+    assert "enter_long" not in filtered["signal"].values
+
+
 def test_latest_signal_returns_dict_when_signal_present():
     df = pd.DataFrame({
         "close": [100.0, 95.0],

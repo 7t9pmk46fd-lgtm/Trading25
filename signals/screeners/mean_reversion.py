@@ -26,6 +26,32 @@ import pandas as pd
 
 @dataclass
 class MeanReversionParams:
+    trend_filter_days: int | None = None  # NOT live -- opt-in only, see below.
+                                 # None (default): zero behavior change from
+                                 # before this field existed; every existing
+                                 # caller that constructs MeanReversionParams()
+                                 # without this arg is byte-for-byte unaffected.
+                                 # Set to an int (e.g. 100) to test the
+                                 # hypothesis added 2026-08-10: only take
+                                 # enter_long when close >= the close's own
+                                 # N-day SMA, i.e. buying a short-term dip
+                                 # within a longer-term uptrend, not inside a
+                                 # structural downtrend. Rationale: the
+                                 # walk-forward validation on the unfiltered
+                                 # signal (signals/SKILL.md) found it trails
+                                 # SPY specifically because unconditional mean
+                                 # reversion has no way to distinguish "healthy
+                                 # pullback" from "further to fall" -- this is
+                                 # a genuinely different mechanism from
+                                 # re-tuning entry_z/exit_z (already proven to
+                                 # just fit noise), not another turn of the
+                                 # same knob. Requires its OWN walk-forward
+                                 # before being taken seriously, same as any
+                                 # other new hypothesis -- see
+                                 # signals/backtest/trend_filter_test.py.
+                                 # Before enough history exists to compute the
+                                 # SMA, entries are refused (not guessed), the
+                                 # same policy already used for ATR/stop data.
     lookback: int = 20          # rolling window, in trading days
     entry_z: float = -1.5       # enter long when z-score drops to/below this.
                                  # Changed from -2.0 on 2026-07-28 after the first-ever
@@ -64,11 +90,20 @@ def generate_signals(df: pd.DataFrame, params: MeanReversionParams = MeanReversi
     out = df.copy()
     out["zscore"] = compute_zscore(out["close"], params.lookback)
 
+    if params.trend_filter_days is not None:
+        sma = out["close"].rolling(window=params.trend_filter_days,
+                                   min_periods=params.trend_filter_days).mean()
+        # NaN (not enough history yet) must fail the filter, not pass it --
+        # "can't confirm an uptrend" is not the same as "confirmed uptrend."
+        trend_ok = (out["close"] >= sma).where(sma.notna(), False).to_numpy()
+    else:
+        trend_ok = np.full(len(out), True)
+
     position = 0
     positions = []
     signals = []
 
-    for z in out["zscore"]:
+    for i, z in enumerate(out["zscore"]):
         signal = None
         if np.isnan(z):
             positions.append(0)
@@ -76,7 +111,7 @@ def generate_signals(df: pd.DataFrame, params: MeanReversionParams = MeanReversi
             continue
 
         if position == 0:
-            if z <= params.entry_z:
+            if z <= params.entry_z and trend_ok[i]:
                 position = 1
                 signal = "enter_long"
             elif params.allow_short and z >= abs(params.entry_z):

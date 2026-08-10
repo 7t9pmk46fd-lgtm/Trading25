@@ -74,9 +74,33 @@ user level, not in this repo.
   oversell bug. Recoverable from git (see `signals/SKILL.md`); the
   system-wide guard it prompted — **the execution loop refuses any sell
   exceeding the real broker-side holding** — is permanent.
+- ⛔ **A trend filter hypothesis was tested and rejected** (2026-08-10,
+  `signals/backtest/trend_filter_test.py`): only entering within a
+  100-day uptrend cut the return to a third of the unfiltered signal
+  (+9.0% vs +26.5% over the same window/universe) for a flat Sharpe.
+  Live default (`trend_filter_days=None`) unchanged.
+- ✅ **This system does not use margin** — `shared.risk.check_cash_floor`
+  (2026-08-10) refuses any buy that would draw cash negative. Added
+  after confirming the live account was running -$4,467 of cash with
+  nothing previously checking it.
+- ✅ **Buys no longer use Alpaca's OTO bracket order** (2026-08-10) —
+  retired after Alpaca stopped allowing the bracket stop leg's
+  time-in-force to be converted at all. A buy now submits plain, polls
+  for the fill, then places a standalone GTC stop from the start.
+- ✅ **Automated test suite** (`tests/`, pytest, 49 tests) — covers the
+  exact bug classes that have hit this system in production: the
+  oversell guard, NaN-vs-None signal handling, PDT/circuit-breaker
+  gating, FIFO realized P&L, the new cash floor.
+- ✅ **Real realized P&L attribution** (`shared.risk.get_today_realized_pnl`)
+  — replaced a hardcoded placeholder with FIFO lot matching over the
+  order ledger. Surfaced on the dashboard readiness meter, not wired into
+  the circuit breaker (which correctly already uses Alpaca's live equity).
 - 🔲 Portfolio-level backtesting (multi-ticker capital allocation).
 - 🔲 Weight-based signal sizing (execution rejects weight-only signals
   rather than guessing).
+- 🔲 Margin-call awareness and interest-cost tracking — the cash floor
+  above stops NEW margin usage, but doesn't yet monitor maintenance
+  margin on positions already held or account for interest accrual.
 
 ## Full autonomous mode (2026-08-02: continuous market-hours loop)
 
