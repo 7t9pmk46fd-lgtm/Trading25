@@ -14,3 +14,6 @@ matplotlib
 
 # MCP server (mcp_server.py)
 mcp>=1.0
+
+# Test suite (tests/)
+pytest>=8.0
