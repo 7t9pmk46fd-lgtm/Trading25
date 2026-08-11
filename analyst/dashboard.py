@@ -181,7 +181,7 @@ def _logs_section():
     return out
 
 
-def _readiness_section():
+def _readiness_section(accounts=None):
     """Go-live readiness: how close this system is to being trustworthy
     with real money, scored from evidence rather than opinion.
 
@@ -193,6 +193,14 @@ def _readiness_section():
     of which this system knows. The single heaviest criterion is
     deliberately "does it beat the benchmark," because a flawlessly
     engineered strategy with no edge is still not worth real money.
+
+    accounts: pass build_state()'s already-fetched accounts dict so the
+    protection-integrity check (below) doesn't make a second full round
+    of Alpaca calls for data build_state already has. Added 2026-08-11 --
+    profiling found this function alone accounted for ~1.85s of a 5.38s
+    page build, almost entirely a duplicate of the accounts fetch
+    build_state had already paid for seconds earlier. Falls back to a
+    fresh fetch if called standalone (e.g. from a script or REPL).
     """
     checks = []
 
@@ -238,7 +246,8 @@ def _readiness_section():
         f"of live behaviour, enough to see the strategy in more than one regime")
 
     # 3. Protection integrity.
-    accounts = _section(_accounts_section)
+    if accounts is None:
+        accounts = _section(_accounts_section)
     total_pos = day_tif = unprotected = shorts = 0
     if isinstance(accounts, dict):
         for acct in accounts.values():
@@ -450,16 +459,20 @@ def _attention(state: dict) -> list[dict]:
 
 
 def build_state() -> dict:
+    accounts = _section(_accounts_section)
     state = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "watchlist": WATCHLIST,
         "clock": _section(_clock_section),
-        "accounts": _section(_accounts_section),
+        "accounts": accounts,
         "db": _section(_db_section),
         "logs": _section(_logs_section),
         "corrections": _section(_corrections_section),
         "reports": _section(_reports_section),
-        "readiness": _section(_readiness_section),
+        # Reuse the accounts fetch above instead of letting readiness make
+        # its own duplicate round of Alpaca calls -- see _readiness_section's
+        # docstring for the profiling that found this.
+        "readiness": _section(lambda: _readiness_section(accounts=accounts)),
     }
     state["attention"] = _attention(state)
     return state

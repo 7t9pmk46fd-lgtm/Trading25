@@ -287,7 +287,14 @@ def gather(day: str | None = None) -> dict:
     else:
         account = alpaca_client.get_account_snapshot()
         open_positions = alpaca_client.get_open_positions()
-        account_equity_by_name = {name: alpaca_client.get_account_snapshot(name).equity for name in KNOWN_ACCOUNTS}
+        # Reuse the fetch above for "default" instead of refetching it via
+        # the dict comprehension below -- KNOWN_ACCOUNTS is ("default",)
+        # today, so that used to be a pure duplicate of the call just above.
+        # Still fetches any OTHER account name if KNOWN_ACCOUNTS ever grows.
+        account_equity_by_name = {
+            name: (account.equity if name == "default" else alpaca_client.get_account_snapshot(name).equity)
+            for name in KNOWN_ACCOUNTS
+        }
         try:
             spy_price = get_latest_trade_prices(["SPY"])["SPY"]
         except Exception:
