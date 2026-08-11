@@ -84,19 +84,38 @@ def get_daily_bars_cached(
     already covers every requested symbol, it's used as-is with no API
     call; otherwise this fetches (only) what's missing and merges it in.
     Old cache files (>3 days) are cleaned up opportunistically.
+
+    "Covers" means present AND spans back to `start` (added 2026-08-11,
+    fixing a real bug: this used to check presence only, so whichever
+    caller populated a symbol's entry FIRST each day locked in THAT
+    caller's window for every other caller for the rest of the day,
+    regardless of how much history they actually asked for. Confirmed
+    live: daily_review.py's ~12-day window cached HST with 8 bars before
+    trail_stops' 40-day request ran, and trail_stops silently got the
+    same truncated 8 bars back -- not enough for a 14-day ATR, so it
+    skipped placing HST's stop while the position sat genuinely
+    unprotected during market hours. A caller now gets a fresh fetch
+    whenever the cached entry doesn't reach back far enough for THAT
+    call, and the wider result overwrites the cache entry -- so the
+    widest window requested on a given day ends up satisfying everyone
+    who asks after it, which is what "cached" should have meant from the
+    start.
     """
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now().date()
     cache_path = _CACHE_DIR / f"daily_bars_{today.isoformat()}.pkl"
 
+    def _covers(df: pd.DataFrame | None) -> bool:
+        return df is not None and not df.empty and df.index.min().date() <= start.date()
+
     cached: dict[str, pd.DataFrame] = {}
     if cache_path.exists():
         with open(cache_path, "rb") as f:
             cached = pickle.load(f)
-        if set(symbols) <= set(cached.keys()):
+        if all(s in cached and _covers(cached[s]) for s in symbols):
             return {s: cached[s] for s in symbols}
 
-    missing = [s for s in symbols if s not in cached]
+    missing = [s for s in symbols if s not in cached or not _covers(cached.get(s))]
     fresh = get_daily_bars(missing, start, end)
     merged = {**cached, **fresh}
 
