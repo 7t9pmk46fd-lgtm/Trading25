@@ -42,19 +42,46 @@ def _log(entry: dict) -> None:
 
 def check_and_trail(dry_run: bool = False, account: str = "default") -> list[dict]:
     positions = alpaca_client.get_open_positions(account=account)
-    if not positions:
-        return [{"status": "no_positions"}]
-
-    open_stops = alpaca_client.get_open_stop_orders(account=account)
-
     symbols = [p["symbol"] for p in positions]
+    open_stops = alpaca_client.get_open_stop_orders(account=account)
+    results: list[dict] = []
+
+    # A stop can outlive the position it was protecting: the exit path
+    # cancels the old stop before submitting its sell (run_execution_loop.py),
+    # but that sell isn't awaited, so a trail_stops cycle can land mid-fill,
+    # see a live residual position with no stop, and -- correctly, for that
+    # moment -- place a fresh one to protect it. If the sell then finishes
+    # filling to zero before anything cancels that fresh stop, it's left
+    # resting with no position behind it. Confirmed live 2026-08-14 on CCI:
+    # a full exit left an 18-share GTC stop resting after the broker-side
+    # position hit 0. Harmless while price stays away from the stop, but if
+    # it were ever hit, a stop-SELL against a shortable symbol with no
+    # position held would open a short -- a direct violation of long-only.
+    # Sweep and cancel any stop whose symbol isn't in the live position list
+    # before doing anything else, every cycle, regardless of how it happened
+    # to become orphaned -- including the all-positions-closed case, which is
+    # exactly why this runs before the no-positions early return below.
+    for orphan_symbol in set(open_stops) - set(symbols):
+        outcome = {"ticker": orphan_symbol}
+        try:
+            cancelled_ids = alpaca_client.cancel_open_orders_for_symbol(orphan_symbol, account=account)
+            outcome["status"] = "cancelled_orphaned_stop"
+            outcome["cancelled_order_ids"] = cancelled_ids
+        except Exception as e:
+            outcome["status"] = "error_cancelling_orphaned_stop"
+            outcome["error"] = f"{type(e).__name__}: {e}"
+        results.append(outcome)
+
+    if not positions:
+        results.append({"status": "no_positions"})
+        return results
+
     bars_by_symbol = get_daily_bars_cached(
         symbols,
         start=datetime.now() - timedelta(days=40),
         end=datetime.now(),
     )
 
-    results = []
     for pos in positions:
         symbol = pos["symbol"]
         outcome = {
