@@ -51,7 +51,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from shared.config import ALPACA_PAPER, KNOWN_ACCOUNTS
 from execution import alpaca_client
-from execution.reconcile_orders import reconcile
+from execution.reconcile_orders import reconcile, reconcile_missing_fills
 from execution.trail_stops import check_and_trail
 
 ET = ZoneInfo("America/New_York")
@@ -134,6 +134,14 @@ def _trail_all_stops():
     return {account: check_and_trail(dry_run=False, account=account) for account in KNOWN_ACCOUNTS}
 
 
+def _reconcile_missing_fills_all_accounts():
+    # Catches broker-side fills (e.g. a triggered protective stop) the
+    # local orders table never got a row for at all -- see
+    # reconcile_missing_fills's docstring. Runs once, end of day, since it
+    # scans a 45-day broker history each time rather than needing to.
+    return {account: reconcile_missing_fills(account=account) for account in KNOWN_ACCOUNTS}
+
+
 def run_trading_day(once: bool = False) -> None:
     if not ALPACA_PAPER:
         _log("refused_to_start", reason="ALPACA_PAPER is not true. This loop trades with no "
@@ -166,6 +174,7 @@ def run_trading_day(once: bool = False) -> None:
             seconds_to_open = (clock["next_open"] - clock["timestamp"]).total_seconds()
             if seconds_to_open > MAX_WAIT_FOR_OPEN_HOURS * 3600:
                 _step("final_reconcile", reconcile)
+                _step("reconcile_missing_fills", _reconcile_missing_fills_all_accounts)
                 _log("session_end", reason="market closed, next open too far away",
                      next_open=clock["next_open"])
                 return

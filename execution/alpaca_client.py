@@ -413,6 +413,70 @@ def replace_stop_order(alpaca_order_id: str, new_stop_price: float, account: str
     }
 
 
+def get_filled_orders_since(since, account: str = "default") -> list[dict]:
+    """
+    Every FILLED order on the broker since `since` (a datetime), regardless
+    of how it originated -- unlike get_order_status, which needs an id this
+    system already knows about, this is how a fill this system never
+    submitted (a resting protective stop triggering on its own) gets
+    discovered at all. run_execution_loop.py only writes a local `orders`
+    row for orders IT submits; a stop placed once and left resting fills
+    later, outside that path, so the local ledger never learns about it on
+    its own. reconcile_orders.reconcile_missing_fills uses this to find
+    exactly those and backfill them.
+
+    Paginates backward in 500-row pages (Alpaca's max per request, and the
+    orders endpoint has no cursor token -- `until` is the only way to page).
+    Required, not defensive-programming excess: every stop ratchet replaces
+    the resting order, and each replace leaves its own CLOSED-status row
+    (status='replaced') behind. Confirmed live 2026-08-17: this account had
+    488 CLOSED orders in just a 45-day window, the overwhelming majority
+    'replaced' noise from routine trailing -- only 36 were ever actually
+    'filled'. A single unpaginated page, sorted most-recent-first, fills up
+    entirely with today's replace noise before reaching back far enough to
+    surface an older real fill -- silently hiding exactly the fills this
+    exists to find. One page already sat at 488/500; the next few weeks of
+    replace noise alone would have broken it even after limit=500 looked
+    like enough.
+    """
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest
+
+    client = _get_trading_client(account)
+    result = []
+    seen_ids: set[str] = set()
+    until = None
+    while True:
+        page = client.get_orders(GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED, after=since, until=until, limit=500,
+        ))
+        if not page:
+            break
+        for o in page:
+            oid = str(o.id)
+            if oid in seen_ids:
+                continue  # `until` is inclusive-ish at the boundary; a page overlap is expected, not a bug
+            seen_ids.add(oid)
+            status = o.status.value if hasattr(o.status, "value") else str(o.status)
+            if status != "filled":
+                continue
+            result.append({
+                "alpaca_order_id": oid,
+                "symbol": o.symbol,
+                "side": o.side.value if hasattr(o.side, "value") else str(o.side),
+                "order_type": o.order_type.value if hasattr(o.order_type, "value") else str(o.order_type),
+                "qty": float(o.qty) if o.qty else None,
+                "filled_qty": float(o.filled_qty) if o.filled_qty else 0.0,
+                "filled_avg_price": float(o.filled_avg_price) if o.filled_avg_price else None,
+                "filled_at": str(o.filled_at) if o.filled_at else None,
+                "submitted_at": str(o.submitted_at) if o.submitted_at else None,
+            })
+        if len(page) < 500:
+            break
+        until = min(o.submitted_at for o in page)
+    return result
+
+
 def get_order_status(alpaca_order_id: str, account: str = "default") -> dict:
     client = _get_trading_client(account)
     order = client.get_order_by_id(alpaca_order_id)
