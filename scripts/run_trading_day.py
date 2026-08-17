@@ -11,7 +11,7 @@ closes handled by the broker, not local weekday math):
   - Once per day, at/after 09:45 ET on any weekday: the swing
     mean-reversion cycle (signal scan -> live risk-gated execution ->
     reconciliation).
-  - Every 15 minutes while the market is open: trail_stops across every
+  - Every hour while the market is open: trail_stops across every
     account (stop raising + DAY->GTC conversion).
   - After the close: one final reconciliation pass, then exits. The
     scheduled task starts a fresh process next trading morning.
@@ -55,7 +55,7 @@ from execution.reconcile_orders import reconcile
 from execution.trail_stops import check_and_trail
 
 ET = ZoneInfo("America/New_York")
-CYCLE_SECONDS = 15 * 60
+CYCLE_SECONDS = 60 * 60  # hourly, changed from 15 min at the user's request 2026-08-17
 # Mon-Fri. Was Mon-Wed, inherited from the retired TradingDeskDailyCycle
 # task; widened 2026-08-06 at the user's request. There was never a
 # strategy reason for skipping Thu/Fri -- a daily mean-reversion signal is
