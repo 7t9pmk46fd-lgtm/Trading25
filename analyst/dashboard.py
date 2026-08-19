@@ -341,6 +341,37 @@ def _readiness_section(accounts=None):
         present / len(guards) if guards else 0.0,
         ", ".join(k for k, v in guards.items() if v) or "could not verify")
 
+    # 9. R&D cadence. The desk's only mechanisms for finding a genuinely new
+    # edge (as opposed to re-tuning the live one, already proven to fit
+    # noise -- see walk_forward.py) are the weekly-rd task's synthesis and
+    # whatever it files to research_notes. Confirmed 2026-08-19: despite
+    # trading-desk-weekly-rd being enabled and firing on schedule, no
+    # Reports/weekly_rd_*.md had ever been produced -- it starts and never
+    # completes. That's invisible everywhere else on this dashboard, which
+    # only reports on the trading loop itself; this is the one check that
+    # would have caught a dormant R&D pipeline before someone assumed "it's
+    # scheduled" meant "it's happening."
+    weekly_reports = sorted((ROOT / "Reports").glob("weekly_rd_*.md"))
+    if not weekly_reports:
+        add("rd_cadence", "Weekly R&D synthesis current", 5, 0.0,
+            "no weekly_rd report has ever been produced — the task is scheduled and fires, "
+            "but has never completed through to a written report")
+    else:
+        latest = weekly_reports[-1]
+        try:
+            latest_date = datetime.strptime(latest.stem.removeprefix("weekly_rd_"), "%Y-%m-%d").date()
+            days_since = (datetime.now().date() - latest_date).days
+            # A 9-day grace window covers a normal Saturday-to-Saturday
+            # cadence plus a day of slack for the "runs on next launch if
+            # the app was closed" behavior; score decays over the two
+            # weeks after that rather than falling off a cliff.
+            score = 1.0 if days_since <= 9 else max(0.0, 1 - (days_since - 9) / 14)
+            add("rd_cadence", "Weekly R&D synthesis current", 5, score,
+                f"last report {latest.name}, {days_since}d ago")
+        except ValueError:
+            add("rd_cadence", "Weekly R&D synthesis current", 5, 0.5,
+                f"found {latest.name} but couldn't parse a date from its filename")
+
     total_weight = sum(c["weight"] for c in checks)
     pct = sum(c["score"] * c["weight"] for c in checks) / total_weight * 100
     blocking = [c["label"] for c in checks if c["score"] < 1.0 and c["weight"] >= 15]
