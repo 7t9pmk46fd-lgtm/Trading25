@@ -1,0 +1,55 @@
+name: tests
+
+# Runs the full pytest suite plus the risk-critical coverage measurement
+# on every push and PR against main -- so "the tests pass" stops being
+# something that depends on whoever's at the keyboard remembering to run
+# `venv/Scripts/python -m pytest tests/` before committing.
+#
+# No Alpaca/Anthropic credentials are configured here, deliberately: the
+# suite mocks execution.alpaca_client and shared.market_data at the
+# network boundary (see tests/conftest.py's docstring), so it needs none
+# -- and scripts/measure_sizing_viability.py, which DOES need live
+# credentials for a real price fetch, is intentionally NOT run here. That
+# stays a locally-run, on-demand script; giving CI real broker
+# credentials wasn't asked for and isn't needed for what this workflow
+# actually checks.
+#
+# Coverage is measured and uploaded as a build artifact but does NOT gate
+# the build (no --cov-fail-under). Several real, already-known gaps exist
+# (signals/generate_signal.py at 0%, tracked via the dashboard readiness
+# meter's "coverage" check) -- failing CI on those today would just be
+# permanently red for a gap this is already tracking, not a regression.
+# A coverage floor is a reasonable future step once there's an agreed
+# baseline to not regress below.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python -m pytest tests/ -v
+
+      - name: Measure coverage on risk-critical code
+        run: python scripts/measure_coverage.py
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: data/coverage_report.json
