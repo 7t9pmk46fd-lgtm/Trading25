@@ -17,3 +17,4 @@ mcp>=1.0
 
 # Test suite (tests/)
 pytest>=8.0
+pytest-cov>=5.0           # scripts/measure_coverage.py, readiness meter's coverage check

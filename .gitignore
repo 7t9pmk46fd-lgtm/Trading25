@@ -13,3 +13,10 @@ Reports/
 data/daily_review_work/
 data/*.lock
 tradingview-mcp-venv/
+
+# Readiness-meter measurement caches (scripts/measure_*.py) -- generated,
+# machine/account-specific, regenerate on demand
+data/coverage_report.json
+data/sizing_viability_report.json
+.coverage
+.coverage_raw.json

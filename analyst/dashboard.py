@@ -20,6 +20,7 @@ Usage:
     venv/Scripts/python analyst/dashboard.py --port N
 """
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -371,6 +372,197 @@ def _readiness_section(accounts=None):
         except ValueError:
             add("rd_cadence", "Weekly R&D synthesis current", 5, 0.5,
                 f"found {latest.name} but couldn't parse a date from its filename")
+
+    # 10. Test coverage on the code real money actually depends on. The
+    # old "tests" check above (#6) only asks "do test files exist" -- 5
+    # files scores 100% whether they cover 5% or 95% of the risk-critical
+    # code. Confirmed 2026-08-24: overall coverage across the whole repo
+    # is 18%, which sounds alarming until you separate out that most of
+    # that is report generation, R&D backtesting, and Alpaca-API-touching
+    # code that can't be meaningfully unit-tested (its correctness comes
+    # from smoke-testing, not pytest). What should actually gate a go-live
+    # decision is coverage on the modules a real order depends on:
+    # sizing/guards, the trailing-stop logic protecting every position,
+    # the entry/exit signal logic, and ledger reconciliation. Reads a
+    # cache (scripts/measure_coverage.py) rather than running pytest --cov
+    # inline -- same reasoning as rd_cadence and the profiling note on the
+    # accounts fetch above: this changes only when code changes, not on
+    # every ~20s dashboard poll, so recomputing it live would just make
+    # every page load slower for a number that's usually identical to the
+    # last one.
+    coverage_path = ROOT / "data" / "coverage_report.json"
+    if not coverage_path.exists():
+        add("coverage", "Test coverage on risk-critical code", 15, 0.0,
+            "never measured — run scripts/measure_coverage.py")
+    else:
+        try:
+            cov = json.loads(coverage_path.read_text())
+            age_days = (datetime.now(timezone.utc) -
+                        datetime.fromisoformat(cov["generated_at"])).days
+            rc_pct = cov["risk_critical_percent"]
+            # Target 80% on risk-critical code, not 100% -- some lines in
+            # every one of these modules are unreachable without hitting
+            # the real broker (a caught APIError branch, a chain-stuck
+            # retry path) even with everything else fully mocked.
+            base_score = min(1.0, rc_pct / 80)
+            # Same 9-day-grace-then-decay shape as rd_cadence: a coverage
+            # snapshot more than ~2 weeks old says less and less about the
+            # code as it actually stands today.
+            staleness = 1.0 if age_days <= 9 else max(0.0, 1 - (age_days - 9) / 14)
+            score = base_score * staleness
+            weakest = min(
+                ((k, v) for k, v in cov["risk_critical_by_module"].items() if v is not None),
+                key=lambda kv: kv[1], default=(None, None),
+            )
+            detail = f"{rc_pct}% avg across risk-critical modules (measured {age_days}d ago)"
+            if weakest[0]:
+                detail += f"; weakest: {weakest[0]} at {weakest[1]}%"
+            if not cov.get("tests_passed", True):
+                detail += " — WARNING: suite did not pass at last measurement"
+                score = 0.0
+            add("coverage", "Test coverage on risk-critical code", 15, score, detail)
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            add("coverage", "Test coverage on risk-critical code", 15, 0.0,
+                f"coverage cache unreadable ({type(e).__name__}) — rerun scripts/measure_coverage.py")
+
+    # 11. Code stability on risk-critical paths. Reliability (#5, above)
+    # only measures runtime errors in the log -- it says nothing about
+    # how much the code itself is still changing. A system whose risk
+    # logic is still being edited every few days hasn't had a chance to
+    # prove itself stable yet, independent of whether those edits were
+    # bug fixes or improvements; three real structural bugs were found
+    # and fixed in execution/trail_stops.py and execution/alpaca_client.py
+    # alone between 2026-08-11 and 2026-08-17. This isn't about blaming
+    # those fixes -- finding and closing real gaps is exactly the point of
+    # engineering readiness work -- it's about being honest that "still
+    # being actively changed" and "settled and proven" are different
+    # states, and only time in the second state is evidence.
+    try:
+        risk_paths = [
+            "shared/risk.py", "execution/run_execution_loop.py",
+            "execution/trail_stops.py", "execution/alpaca_client.py",
+            "execution/reconcile_orders.py",
+        ]
+        git_out = subprocess.run(
+            ["git", "log", "-1", "--format=%ct", "--"] + risk_paths,
+            cwd=ROOT, capture_output=True, text=True, timeout=5,
+        )
+        if git_out.returncode == 0 and git_out.stdout.strip():
+            last_touch = datetime.fromtimestamp(int(git_out.stdout.strip()), tz=timezone.utc)
+            days_stable = (datetime.now(timezone.utc) - last_touch).days
+            # 21 days (three full weeks) of no risk-code changes before
+            # calling this fully scored -- a deliberately high bar for a
+            # system being considered for real money.
+            score = min(1.0, days_stable / 21)
+            add("code_stability", "Risk-critical code has stabilized", 10, score,
+                f"{days_stable}d since the last change to risk/execution/trail_stops/reconcile code "
+                f"(target: 21d+ untouched)")
+        else:
+            add("code_stability", "Risk-critical code has stabilized", 10, 0.0,
+                "could not read git history for risk-critical paths")
+    except Exception as e:
+        add("code_stability", "Risk-critical code has stabilized", 10, 0.0,
+            f"git check failed: {type(e).__name__}: {e}")
+
+    # 12. Tail risk, separate from "beats benchmark." Check #1 (edge)
+    # scores relative return/Sharpe; it says nothing about how bad the
+    # worst stretch was in absolute terms, which is a different question
+    # a real-money decision needs answered on its own. Reuses the same
+    # walk-forward backtest_runs rows check #1 already reads.
+    with db.db_session() as conn:
+        strat_dd = conn.execute(
+            "SELECT max_drawdown FROM backtest_runs WHERE strategy='mean_reversion_fixed_oos' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        bench_dd = conn.execute(
+            "SELECT max_drawdown FROM backtest_runs WHERE strategy='spy_oos_benchmark' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    if strat_dd and bench_dd and strat_dd["max_drawdown"] is not None:
+        sdd, bdd = strat_dd["max_drawdown"], bench_dd["max_drawdown"]
+        # Scored on the drawdown itself, not on beating SPY's -- a -14%
+        # worst stretch is a meaningful thing to know about regardless of
+        # whether SPY's was worse. 1.0 at -10% or shallower, 0.0 at -30%
+        # or deeper, linear between. These bounds are a judgment call, not
+        # a derived constant -- reasonable people could set them
+        # differently; the point is surfacing the number at all, not this
+        # exact curve.
+        score = max(0.0, min(1.0, (-0.30 - sdd) / (-0.30 - -0.10)))
+        add("tail_risk", "Worst-case drawdown (walk-forward)", 10, score,
+            f"strategy {sdd:+.1%} max drawdown vs SPY {bdd:+.1%} over the same window")
+    else:
+        add("tail_risk", "Worst-case drawdown (walk-forward)", 10, 0.0,
+            "no walk-forward max_drawdown on record")
+
+    # 13. Credential/secrets hygiene. Cheap, binary, and exactly the kind
+    # of mistake that's silent until it isn't -- a committed .env would
+    # leak live API keys into git history (and, if this repo is ever
+    # pushed somewhere less private, to the world) permanently, since
+    # rewriting history after the fact doesn't un-leak a key that was
+    # already exposed. Never actually happened on this repo as far as the
+    # log shows, but "never happened yet" isn't the same as "checked."
+    try:
+        gitignore_text = (ROOT / ".gitignore").read_text() if (ROOT / ".gitignore").exists() else ""
+        env_ignored = ".env" in gitignore_text
+        tracked = subprocess.run(
+            ["git", "ls-files", ".env"], cwd=ROOT, capture_output=True, text=True, timeout=5,
+        )
+        env_tracked = bool(tracked.stdout.strip())
+        ok = env_ignored and not env_tracked
+        detail = (
+            ".env gitignored and untracked" if ok else
+            f".env is TRACKED BY GIT — real credentials may be in history" if env_tracked else
+            ".env is not in .gitignore — one `git add .` away from committing real credentials"
+        )
+        add("secrets_hygiene", "Credentials not committed to git", 5, 1.0 if ok else 0.0, detail)
+    except Exception as e:
+        add("secrets_hygiene", "Credentials not committed to git", 5, 0.0,
+            f"could not verify: {type(e).__name__}: {e}")
+
+    # 14. Small-capital sizing viability. Structural gap found 2026-08-17
+    # (conversation, not code): max_position_pct=5% means any position
+    # priced above 5% of account equity rounds down to 0 shares --
+    # compute_position_size floors to an int. At $100k this is invisible
+    # (5% = $5,000, covers nearly the whole universe); at a realistic
+    # smaller starting balance a large fraction of the universe becomes
+    # silently untradeable, not degraded -- the screener would keep
+    # ranking those names, execution would just floor them to nothing.
+    # Reads scripts/measure_sizing_viability.py's cache (full ~522-name
+    # watchlist) rather than data/cache/daily_bars_*.pkl -- that cache is
+    # populated incrementally by whichever caller last ran (trail_stops
+    # only fetches currently-held symbols), and confirmed live 2026-08-24
+    # it held exactly the ~20 held positions: a biased, already-selected
+    # sample, not the universe a small-capital investor is choosing from.
+    sizing_path = ROOT / "data" / "sizing_viability_report.json"
+    if not sizing_path.exists():
+        add("small_capital_sizing", "Tradeable at a small starting balance", 5, 0.0,
+            "never measured — run scripts/measure_sizing_viability.py")
+    else:
+        try:
+            sv = json.loads(sizing_path.read_text())
+            age_days = (datetime.now(timezone.utc) -
+                        datetime.fromisoformat(sv["generated_at"])).days
+            at_1k = sv["by_capital"]["1000"]
+            # This is informational more than pass/fail -- there's no
+            # "correct" fraction of the universe that must be affordable
+            # at a token reference capital, since nobody is required to
+            # start at exactly $1,000. Scored gently (never below 0.3) so
+            # it surfaces the number without swinging the overall percent
+            # around for something that's a config choice, not a defect.
+            # Prices drift slowly enough that a several-week-old measurement
+            # is still roughly right, unlike coverage/rd_cadence which
+            # track things that go stale fast -- gentler decay here.
+            staleness = 1.0 if age_days <= 21 else max(0.0, 1 - (age_days - 21) / 30)
+            score = max(0.3, min(1.0, at_1k["pct"] / 0.5)) * staleness
+            add("small_capital_sizing", "Tradeable at a small starting balance", 5, score,
+                f"at $1,000 equity / current {sv['max_position_pct']:.0%} position cap, "
+                f"{at_1k['tradeable']}/{at_1k['total']} full watchlist names ({at_1k['pct']:.0%}) "
+                f"are priced low enough to buy at least 1 share (measured {age_days}d ago) — "
+                f"see conversation 2026-08-17 for the tradeoff (raise max_position_pct vs. "
+                f"shrink the universe)")
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            add("small_capital_sizing", "Tradeable at a small starting balance", 5, 0.0,
+                f"sizing cache unreadable ({type(e).__name__}) — rerun scripts/measure_sizing_viability.py")
 
     total_weight = sum(c["weight"] for c in checks)
     pct = sum(c["score"] * c["weight"] for c in checks) / total_weight * 100
