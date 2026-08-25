@@ -154,8 +154,10 @@ def test_undersized_stop_qty_fixed_together_with_a_price_raise(monkeypatch):
     monkeypatch.setattr(alpaca_client, "cancel_open_orders_for_symbol",
                          lambda symbol, account="default": [])
     monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"BA": _flat_bars()})
-    # candidate_stop = 230 - 2*5.5 = 219.0, above the existing 199.89 --
-    # price should raise AND qty should be corrected in the same call.
+    # raw ATR pct = 2*5.5/230 = 4.78%, below the 5% floor -> clamped to 5%,
+    # candidate_stop = 230 * 0.95 = 218.5, still above the existing 199.89
+    # -- price should raise (to the clamped value) AND qty should be
+    # corrected in the same call.
     monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 5.5)
 
     replace_calls = []
@@ -171,7 +173,81 @@ def test_undersized_stop_qty_fixed_together_with_a_price_raise(monkeypatch):
 
     assert len(replace_calls) == 1
     assert replace_calls[0]["qty"] == 26.0
-    assert replace_calls[0]["stop_price"] == 219.0
+    assert replace_calls[0]["stop_price"] == 218.5
 
     ba_result = next(r for r in results if r.get("ticker") == "BA")
     assert ba_result["status"] == "fixed_qty_and_raised_stop"
+
+
+# --- Trail distance clamp (2026-08-26, user-requested): stop distance is
+# still ATR-derived, but bounded to 5%-8% of price rather than left to
+# float freely. Confirmed live before this change: unclamped 2xATR across
+# 19 real positions ranged 4.3%-14.65% -- these pin both edges of the
+# clamp plus the natural, unclamped middle.
+
+def test_trail_pct_clamped_to_floor_when_atr_is_narrow(monkeypatch):
+    # 2*atr/price = 2*1/200 = 1% -- well under the 5% floor.
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "QUIET", "qty": 10.0, "current_price": 200.0, "avg_entry_price": 190.0, "unrealized_pl": 100.0},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {})
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"QUIET": _flat_bars()})
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 1.0)
+
+    placed = {}
+
+    def _fake_place(symbol, qty, stop_price, account="default"):
+        placed["stop_price"] = stop_price
+        return {"alpaca_order_id": "new-1", "stop_price": stop_price}
+
+    monkeypatch.setattr(alpaca_client, "place_protective_stop", _fake_place)
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert placed["stop_price"] == 190.0  # 200 * (1 - 0.05), floor applied
+    result = next(r for r in results if r.get("ticker") == "QUIET")
+    assert result["trail_pct"] == 0.05
+
+
+def test_trail_pct_clamped_to_ceiling_when_atr_is_wide(monkeypatch):
+    # 2*atr/price = 2*15/100 = 30% -- far above the 8% ceiling. Mirrors the
+    # real TTD case (14.65% unclamped) that motivated the ceiling.
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "WILD", "qty": 10.0, "current_price": 100.0, "avg_entry_price": 90.0, "unrealized_pl": 100.0},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {})
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"WILD": _flat_bars()})
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 15.0)
+
+    placed = {}
+    monkeypatch.setattr(alpaca_client, "place_protective_stop",
+                         lambda symbol, qty, stop_price, account="default": (placed.__setitem__("stop_price", stop_price)
+                                                                              or {"alpaca_order_id": "new-1", "stop_price": stop_price}))
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert placed["stop_price"] == 92.0  # 100 * (1 - 0.08), ceiling applied
+    result = next(r for r in results if r.get("ticker") == "WILD")
+    assert result["trail_pct"] == 0.08
+
+
+def test_trail_pct_unclamped_when_atr_is_already_in_band(monkeypatch):
+    # 2*atr/price = 2*6/100 = 12%... no wait, pick a value inside 5-8%:
+    # 2*3.5/100 = 7% -- inside the band, should pass through unchanged.
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "NORMAL", "qty": 10.0, "current_price": 100.0, "avg_entry_price": 90.0, "unrealized_pl": 100.0},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {})
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"NORMAL": _flat_bars()})
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 3.5)
+
+    placed = {}
+    monkeypatch.setattr(alpaca_client, "place_protective_stop",
+                         lambda symbol, qty, stop_price, account="default": (placed.__setitem__("stop_price", stop_price)
+                                                                              or {"alpaca_order_id": "new-1", "stop_price": stop_price}))
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert placed["stop_price"] == 93.0  # 100 * (1 - 0.07), pure ATR-derived, no clamp
+    result = next(r for r in results if r.get("ticker") == "NORMAL")
+    assert result["trail_pct"] == 0.07

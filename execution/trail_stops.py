@@ -31,6 +31,21 @@ LOG_PATH = ROOT / "data" / "trail_stop_log.jsonl"
 ATR_STOP_MULTIPLE = 2.0
 MIN_STOP_INCREASE = 0.01  # skip replacing on sub-cent noise
 
+# Trail distance is still ATR-derived (a stock's own recent volatility,
+# not a guess), but clamped into this band -- added 2026-08-26 at the
+# user's request. Confirmed live before this change: unclamped 2xATR
+# across the 19 then-held positions ranged 4.3%-14.65% of price (avg
+# 6.8%). Most were already in-band; the real outliers were the point --
+# SBAC/BA/HST sat near 4.3-4.8% (tighter than wanted), TTD sat at 14.65%
+# (nearly double the requested ceiling, giving back much more unrealized
+# gain than necessary before the stop would ever trigger). The clamp
+# doesn't touch entry-time position sizing (shared.risk.compute_position_size
+# has its own, separate stop-distance math tied to the 1%-risk-per-trade
+# sizing) -- this only bounds how tightly gains get protected as price
+# moves after entry.
+MIN_TRAIL_PCT = 0.05
+MAX_TRAIL_PCT = 0.08
+
 
 def _log(entry: dict) -> None:
     entry["logged_at"] = datetime.now(timezone.utc).isoformat()
@@ -99,7 +114,11 @@ def check_and_trail(dry_run: bool = False, account: str = "default") -> list[dic
                 continue
 
             atr = compute_atr(bars)
-            candidate_stop = pos["current_price"] - ATR_STOP_MULTIPLE * atr
+            price = pos["current_price"]
+            raw_pct = (ATR_STOP_MULTIPLE * atr) / price if price > 0 else MAX_TRAIL_PCT
+            trail_pct = min(MAX_TRAIL_PCT, max(MIN_TRAIL_PCT, raw_pct))
+            outcome["trail_pct"] = round(trail_pct, 4)
+            candidate_stop = price * (1 - trail_pct)
             existing = open_stops.get(symbol)
 
             if existing is None:
