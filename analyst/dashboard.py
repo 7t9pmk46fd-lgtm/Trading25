@@ -71,22 +71,64 @@ def _section(fn):
 
 
 def _accounts_section():
+    """
+    Was the single biggest cost in every dashboard page build: 4 fully
+    independent Alpaca network calls (SPY price, then per account --
+    snapshot, positions, stops) run one after another. Profiled
+    2026-08-26 at 3.8s of a 3.9s total build, with only one account
+    configured -- each additional account would previously have added its
+    own 3 sequential round-trips on top. None of these calls depend on
+    each other's result (the only thing downstream needs is spy_price,
+    used after every fetch has already returned), so there's no reason
+    they can't all be in flight at once. A thread pool is enough here --
+    this is pure I/O wait on network calls, not CPU work, so threads
+    aren't fighting the GIL for anything real.
+    """
+    from concurrent.futures import ThreadPoolExecutor
     from dataclasses import asdict
 
     from execution import alpaca_client
     from shared.market_data import get_latest_trade_prices
 
-    try:
-        spy_price = get_latest_trade_prices(["SPY"])["SPY"]
-    except Exception:
-        spy_price = None
+    # Force the alpaca SDK's own lazily-imported submodules to fully load
+    # NOW, single-threaded, before any pool worker touches them. Every
+    # alpaca_client function does its `from alpaca.trading.X import Y`
+    # inside the function body (deliberately, to keep import time light for
+    # callers that never need the SDK at all) -- fine when called one at a
+    # time, but the first import of a given module is genuinely unsafe to
+    # do from multiple threads at once: confirmed real 2026-08-26,
+    # parallelizing these exact calls hit a `_frozen_importlib._DeadlockError`
+    # from two threads racing to import alpaca.trading.enums for the first
+    # time. Once a module is in sys.modules, re-importing it from any
+    # number of threads is just a fast dict lookup -- safe. This costs
+    # nothing on a warm process (Python no-ops an already-loaded import).
+    import alpaca.data.enums, alpaca.data.requests  # noqa: E401,F401
+    import alpaca.trading.client, alpaca.trading.enums, alpaca.trading.requests  # noqa: E401,F401
+
+    def _spy_price():
+        try:
+            return get_latest_trade_prices(["SPY"])["SPY"]
+        except Exception:
+            return None
+
+    jobs = {"spy_price": _spy_price}
+    for name in KNOWN_ACCOUNTS:
+        jobs[f"{name}:snapshot"] = lambda n=name: alpaca_client.get_account_snapshot(account=n)
+        jobs[f"{name}:positions"] = lambda n=name: alpaca_client.get_open_positions(account=n)
+        jobs[f"{name}:stops"] = lambda n=name: alpaca_client.get_open_stop_orders(account=n)
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {key: pool.submit(fn) for key, fn in jobs.items()}
+        results = {key: f.result() for key, f in futures.items()}
+
+    spy_price = results["spy_price"]
 
     accounts = {}
     with db.db_session() as conn:
         for name in KNOWN_ACCOUNTS:
-            snap = alpaca_client.get_account_snapshot(account=name)
-            positions = alpaca_client.get_open_positions(account=name)
-            stops = alpaca_client.get_open_stop_orders(account=name)
+            snap = results[f"{name}:snapshot"]
+            positions = results[f"{name}:positions"]
+            stops = results[f"{name}:stops"]
             benchmark = None
             if spy_price is not None:
                 cmp = compute_benchmark_comparison(conn, name, snap.equity, spy_price)
