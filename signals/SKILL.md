@@ -8,6 +8,34 @@ order. Signals are written to the shared `signals` table and only
 
 ## Strategies
 
+### 🧪 Scale-in (add-to-existing-position) -- IN DEVELOPMENT, quarantined (2026-08-25)
+
+`signals/research/scale_in.py` + `tests/test_scale_in.py`. User-requested:
+develop the decision logic in isolation and prove it's functional before any
+question of wiring it into the live desk. Today the desk NEVER adds to a
+position it already holds -- `generate_signal.py` skips any ticker already
+in `get_held_positions()` unconditionally (`status: "skipped_already_holding"`),
+and the backtest engine's own docstring says "no pyramiding" explicitly.
+
+`signals/research/` is a new package, deliberately separate from both
+`screeners/` (wired into the live cycle) and `backtest/` (analysis scripts)
+-- nothing in it is imported by `generate_signal.py`, `run_cycle.py`,
+`scripts/run_trading_day.py`, or anything else in the live path, and it
+never touches `alpaca_client` or the DB. `evaluate_add()` is a pure
+function: given a held position and a fresh price/z-score, it decides
+whether to add, reusing `shared.risk.compute_position_size` for sizing
+(same-sized second bet, not a bigger one) and mirroring `trail_stops.py`'s
+"only ratchets up" rule for the resulting stop (an add fires at a lower
+price than the original entry, so a naive ATR-from-current-price stop
+would loosen protection -- the tighter of the two is kept).
+
+**Current status: unit-tested (9/9 passing, proves the decision logic is
+internally correct), NOT backtested, NOT walk-forward validated, NOT
+wired anywhere.** Per the walk-forward result above, a new numeric knob
+(here: `add_z_gap`, `max_adds`) is exactly the kind of thing that can fit
+noise -- this needs its own walk-forward before it's anything but a
+proposal, the same bar every other hypothesis on this page had to clear.
+
 ### ⚠ Trend filter hypothesis tested and REJECTED (2026-08-10)
 
 `backtest/trend_filter_test.py`. Rather than re-tune entry_z/exit_z again
