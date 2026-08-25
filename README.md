@@ -254,12 +254,11 @@ open; a missed run fires on next launch) complete the unattended day:
   never completing — the fix was the same one that worked for
   daily-review: fewer, more mechanical, token-bounded steps.
 - **trading-desk-nightly-rd** (weekdays 5:30 PM CT): re-enabled as of
-  2026-08-25 (was disabled 2026-08-10 when its operational health check
-  was folded into daily-review to cut token cost). Barred from proposing
-  parameter changes since the walk-forward showed that kind of inference
-  is noise. With both this and daily-review's folded-in check now
-  running, confirm whether that's deliberate (a second independent check)
-  or accidental double-spend before assuming either.
+  2026-08-25, intentionally — a deliberate second independent health
+  check alongside daily-review's folded-in one, not a leftover. (Was
+  disabled 2026-08-10 when its check was first folded into daily-review
+  to cut token cost.) Barred from proposing parameter changes since the
+  walk-forward showed that kind of inference is noise.
 
 ## Risk rules (enforced in code, not just documented)
 
