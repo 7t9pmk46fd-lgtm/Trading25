@@ -697,12 +697,25 @@ def _attention(state: dict) -> list[dict]:
             if hb:
                 try:
                     age = datetime.now(timezone.utc) - datetime.fromisoformat(hb)
-                    stale = age > timedelta(minutes=20)
+                    # scripts/run_trading_day.py's CYCLE_SECONDS is the real
+                    # source of truth for how often the loop should log --
+                    # this threshold is a plain constant, not derived from
+                    # it, because scripts/ isn't an importable package.
+                    # Confirmed real 2026-08-26: this was still 20 minutes
+                    # after CYCLE_SECONDS moved from 15 min to 60 min
+                    # (2026-08-18), so the dashboard falsely flagged the
+                    # loop as down for roughly 40 minutes out of every hour
+                    # -- a false CRITICAL alert firing that often is worse
+                    # than no alert, since it teaches you to ignore this
+                    # panel. STALE_LOOP_MINUTES must be updated by hand if
+                    # CYCLE_SECONDS ever changes again.
+                    STALE_LOOP_MINUTES = 75  # 60-min cycle + buffer for jitter/startup
+                    stale = age > timedelta(minutes=STALE_LOOP_MINUTES)
                 except ValueError:
                     pass
             if stale:
                 items.append({"severity": "critical",
-                              "what": "Market is OPEN but the trading loop hasn't logged in 20+ minutes",
+                              "what": "Market is OPEN but the trading loop hasn't logged in 75+ minutes",
                               "why": "TradingDeskMarketLoop may not be running -- check Task Scheduler."})
         n_err = len(logs.get("errors_today", []))
         if n_err:
