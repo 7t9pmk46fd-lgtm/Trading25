@@ -385,7 +385,8 @@ def get_open_stop_orders(account: str = "default") -> dict[str, dict]:
     return result
 
 
-def replace_stop_order(alpaca_order_id: str, new_stop_price: float, account: str = "default") -> dict:
+def replace_stop_order(alpaca_order_id: str, new_stop_price: float, qty: float | None = None,
+                        account: str = "default") -> dict:
     """
     Raises the stop price on an existing open stop order in place, instead
     of cancel-then-resubmit -- avoids the brief window where a
@@ -397,12 +398,24 @@ def replace_stop_order(alpaca_order_id: str, new_stop_price: float, account: str
     submit_market_order_with_stop's docstring). ReplaceOrderRequest is the
     only place in the API that can change an order's TIF after the fact;
     the original StopLossRequest bracket leg has no such field.
+
+    qty: when given, also corrects the order's quantity in the same
+    replace call. Exists because a stop's qty can drift from the live
+    position -- confirmed real 2026-08-24 on BA, root-caused to
+    run_execution_loop.py's _wait_for_fill() returning as soon as a buy
+    shows ANY fill rather than a terminal status, so a multi-lot fill can
+    size the initial stop off a partial quantity with nothing ever
+    topping it up once the rest fills. Left None for an ordinary
+    price-only raise.
     """
     from alpaca.trading.enums import TimeInForce
     from alpaca.trading.requests import ReplaceOrderRequest
 
     client = _get_trading_client(account)
-    request = ReplaceOrderRequest(stop_price=round(new_stop_price, 2), time_in_force=TimeInForce.GTC)
+    kwargs = {"stop_price": round(new_stop_price, 2), "time_in_force": TimeInForce.GTC}
+    if qty is not None:
+        kwargs["qty"] = qty
+    request = ReplaceOrderRequest(**kwargs)
     order = client.replace_order_by_id(alpaca_order_id, request)
 
     return {
@@ -410,6 +423,7 @@ def replace_stop_order(alpaca_order_id: str, new_stop_price: float, account: str
         "symbol": order.symbol,
         "status": order.status.value if hasattr(order.status, "value") else str(order.status),
         "stop_price": new_stop_price,
+        "qty": float(order.qty) if order.qty is not None else qty,
     }
 
 

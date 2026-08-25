@@ -135,19 +135,34 @@ def check_and_trail(dry_run: bool = False, account: str = "default") -> list[dic
 
             new_stop = max(existing["stop_price"], candidate_stop)
             outcome["existing_stop"] = existing["stop_price"]
+            outcome["existing_stop_qty"] = existing.get("qty")
             needs_gtc_conversion = existing.get("time_in_force") == "day"
+            # A stop's qty can drift from the live position -- confirmed
+            # real 2026-08-24 on BA: run_execution_loop.py's
+            # _wait_for_fill() returns as soon as a buy shows ANY fill
+            # rather than waiting for a terminal status, so a multi-lot
+            # fill (visible as a fractional weighted-average fill price)
+            # can size the initial stop off a partial quantity (23 of 26
+            # shares filled so far) with nothing ever topping it up once
+            # the rest fills a moment later. Checked every cycle here
+            # (not just at entry) so any drift -- under- or over-sized --
+            # self-heals within one 15-min pass regardless of how it
+            # arose, the same "detect and correct on the position that's
+            # actually true" philosophy as the orphaned-stop sweep above.
+            qty_mismatch = abs(existing.get("qty", pos["qty"]) - pos["qty"]) > 1e-6
 
             if new_stop - existing["stop_price"] < MIN_STOP_INCREASE:
-                if not needs_gtc_conversion:
+                if not needs_gtc_conversion and not qty_mismatch:
                     outcome["status"] = "unchanged"
                     results.append(outcome)
                     continue
                 # Price hasn't moved enough to justify a raise, but this
-                # stop is still DAY-TIF (an OTO leg that's never been
-                # touched by a replace) and will expire at market close
-                # today if left alone -- force a same-price replace just
-                # to convert it to GTC. See submit_market_order_with_stop's
-                # docstring for why this matters.
+                # stop still needs a same-price replace -- either it's
+                # still DAY-TIF (an OTO leg that's never been touched by a
+                # replace) and will expire at market close today if left
+                # alone (see submit_market_order_with_stop's docstring),
+                # or its qty no longer matches the live position. Force
+                # one.
                 new_stop = existing["stop_price"]
 
             if new_stop >= pos["current_price"]:
@@ -160,15 +175,27 @@ def check_and_trail(dry_run: bool = False, account: str = "default") -> list[dic
 
             raised_price = new_stop > existing["stop_price"]
             if dry_run:
-                outcome["status"] = "dry_run_would_raise_stop" if raised_price else "dry_run_would_convert_to_gtc"
+                if qty_mismatch:
+                    outcome["status"] = "dry_run_would_fix_qty"
+                elif raised_price:
+                    outcome["status"] = "dry_run_would_raise_stop"
+                else:
+                    outcome["status"] = "dry_run_would_convert_to_gtc"
                 outcome["new_stop"] = new_stop
+                outcome["new_qty"] = pos["qty"] if qty_mismatch else existing.get("qty")
             else:
                 try:
                     order = alpaca_client.replace_stop_order(
-                        existing["alpaca_order_id"], new_stop, account=account
+                        existing["alpaca_order_id"], new_stop,
+                        qty=pos["qty"] if qty_mismatch else None,
+                        account=account,
                     )
-                    outcome["status"] = "raised_stop" if raised_price else "converted_to_gtc"
+                    if qty_mismatch:
+                        outcome["status"] = "fixed_qty_and_raised_stop" if raised_price else "fixed_qty"
+                    else:
+                        outcome["status"] = "raised_stop" if raised_price else "converted_to_gtc"
                     outcome["new_stop"] = order["stop_price"]
+                    outcome["new_qty"] = order.get("qty")
                 except Exception as e:
                     # Confirmed real 2026-07-27: a replace chain can get
                     # wedged in Alpaca's paper environment (an ancestor

@@ -73,3 +73,105 @@ def test_no_orphans_means_nothing_cancelled(monkeypatch):
     trail_stops.check_and_trail(dry_run=False, account="default")
 
     assert cancelled == []
+
+
+# --- Stop qty drift (BA, 2026-08-24): _wait_for_fill in run_execution_loop.py
+# can return on a partial fill, sizing the initial protective stop below the
+# eventual full position. These pin trail_stops noticing and correcting that
+# drift, independent of whether the stop price also needs to move.
+
+def _flat_bars(n=20):
+    # compute_atr is monkeypatched directly in these tests, so the bars
+    # content is irrelevant -- only len(bars) >= 15 needs to hold to clear
+    # the "insufficient bars" guard.
+    return list(range(n))
+
+
+def test_undersized_stop_qty_is_topped_up(monkeypatch):
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "BA", "qty": 26.0, "current_price": 210.0, "avg_entry_price": 210.17, "unrealized_pl": -4.4},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {
+        "BA": {"alpaca_order_id": "stop-1", "stop_price": 199.89, "qty": 23.0, "time_in_force": "gtc", "status": "new"},
+    })
+    monkeypatch.setattr(alpaca_client, "cancel_open_orders_for_symbol",
+                         lambda symbol, account="default": [])
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"BA": _flat_bars()})
+    # ATR chosen so candidate_stop (210 - 2*atr) stays below the existing
+    # 199.89 stop -- isolates the qty fix from any price raise.
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 5.5)
+
+    replace_calls = []
+
+    def _fake_replace(alpaca_order_id, new_stop_price, qty=None, account="default"):
+        replace_calls.append({"id": alpaca_order_id, "stop_price": new_stop_price, "qty": qty})
+        return {"alpaca_order_id": alpaca_order_id, "symbol": "BA", "status": "replaced",
+                "stop_price": new_stop_price, "qty": qty}
+
+    monkeypatch.setattr(alpaca_client, "replace_stop_order", _fake_replace)
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert len(replace_calls) == 1
+    assert replace_calls[0]["qty"] == 26.0
+    assert replace_calls[0]["stop_price"] == 199.89  # price unchanged, qty-only fix
+
+    ba_result = next(r for r in results if r.get("ticker") == "BA")
+    assert ba_result["status"] == "fixed_qty"
+    assert ba_result["new_qty"] == 26.0
+
+
+def test_matching_stop_qty_is_left_unchanged(monkeypatch):
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "BA", "qty": 26.0, "current_price": 210.0, "avg_entry_price": 210.17, "unrealized_pl": -4.4},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {
+        "BA": {"alpaca_order_id": "stop-1", "stop_price": 199.89, "qty": 26.0, "time_in_force": "gtc", "status": "new"},
+    })
+    monkeypatch.setattr(alpaca_client, "cancel_open_orders_for_symbol",
+                         lambda symbol, account="default": [])
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"BA": _flat_bars()})
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 5.5)
+
+    replace_calls = []
+    monkeypatch.setattr(alpaca_client, "replace_stop_order",
+                         lambda *a, **kw: replace_calls.append((a, kw)))
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert replace_calls == []
+    ba_result = next(r for r in results if r.get("ticker") == "BA")
+    assert ba_result["status"] == "unchanged"
+
+
+def test_undersized_stop_qty_fixed_together_with_a_price_raise(monkeypatch):
+    monkeypatch.setattr(alpaca_client, "get_open_positions", lambda account="default": [
+        {"symbol": "BA", "qty": 26.0, "current_price": 230.0, "avg_entry_price": 210.17, "unrealized_pl": 515.6},
+    ])
+    monkeypatch.setattr(alpaca_client, "get_open_stop_orders", lambda account="default": {
+        "BA": {"alpaca_order_id": "stop-1", "stop_price": 199.89, "qty": 23.0, "time_in_force": "gtc", "status": "new"},
+    })
+    monkeypatch.setattr(alpaca_client, "cancel_open_orders_for_symbol",
+                         lambda symbol, account="default": [])
+    monkeypatch.setattr(trail_stops, "get_daily_bars_cached", lambda symbols, start, end: {"BA": _flat_bars()})
+    # candidate_stop = 230 - 2*5.5 = 219.0, above the existing 199.89 --
+    # price should raise AND qty should be corrected in the same call.
+    monkeypatch.setattr(trail_stops, "compute_atr", lambda bars: 5.5)
+
+    replace_calls = []
+
+    def _fake_replace(alpaca_order_id, new_stop_price, qty=None, account="default"):
+        replace_calls.append({"stop_price": new_stop_price, "qty": qty})
+        return {"alpaca_order_id": alpaca_order_id, "symbol": "BA", "status": "replaced",
+                "stop_price": new_stop_price, "qty": qty}
+
+    monkeypatch.setattr(alpaca_client, "replace_stop_order", _fake_replace)
+
+    results = trail_stops.check_and_trail(dry_run=False, account="default")
+
+    assert len(replace_calls) == 1
+    assert replace_calls[0]["qty"] == 26.0
+    assert replace_calls[0]["stop_price"] == 219.0
+
+    ba_result = next(r for r in results if r.get("ticker") == "BA")
+    assert ba_result["status"] == "fixed_qty_and_raised_stop"
