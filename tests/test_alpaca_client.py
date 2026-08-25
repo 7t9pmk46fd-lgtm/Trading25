@@ -27,6 +27,15 @@ def test_credentials_for_unknown_account_raises():
 
 
 def test_credentials_for_default_requires_alpaca_credentials(monkeypatch):
+    # require_alpaca_credentials() checks shared.config's own module-level
+    # names directly (not execution.alpaca_client's imported copies) -- see
+    # the sibling test below. Patching only alpaca_client's copies leaves
+    # the real .env-loaded credentials in place for require_alpaca_credentials
+    # to see, so it never raises -- confirmed real: this test passed for the
+    # wrong reason (or rather didn't fail for the wrong reason) until run
+    # against a repo with real credentials configured.
+    monkeypatch.setattr(shared_config, "ALPACA_API_KEY", "")
+    monkeypatch.setattr(shared_config, "ALPACA_SECRET_KEY", "")
     monkeypatch.setattr(alpaca_client, "ALPACA_API_KEY", "")
     monkeypatch.setattr(alpaca_client, "ALPACA_SECRET_KEY", "")
     with pytest.raises(RuntimeError):
@@ -253,13 +262,20 @@ def test_get_open_stop_orders_keeps_first_pending_replace_over_later_pending_rep
 # ----------------------------------------------------------- replace stop
 
 def test_replace_stop_order_rounds_and_echoes_new_price(monkeypatch):
-    fake_order = SimpleNamespace(id="ord-1", symbol="AAPL", status="new")
+    # qty=None on the fake order matches a real Alpaca order object's shape
+    # for a price-only replace (qty is a real attribute, not absent) --
+    # added when replace_stop_order grew qty-echoing (2026-08-25, the
+    # stop-qty-drift fix); a SimpleNamespace missing .qty entirely used to
+    # raise AttributeError here instead of exercising the "no qty requested"
+    # branch this test is actually meant to cover.
+    fake_order = SimpleNamespace(id="ord-1", symbol="AAPL", status="new", qty=None)
     captured = {}
 
     def fake_replace(order_id, request):
         captured["order_id"] = order_id
         captured["stop_price"] = request.stop_price
         captured["tif"] = request.time_in_force
+        captured["qty_in_request"] = getattr(request, "qty", None)
         return fake_order
 
     fake_client = SimpleNamespace(replace_order_by_id=fake_replace)
@@ -271,7 +287,26 @@ def test_replace_stop_order_rounds_and_echoes_new_price(monkeypatch):
     assert captured["stop_price"] == 123.46  # rounded to cents
     from alpaca.trading.enums import TimeInForce
     assert captured["tif"] == TimeInForce.GTC  # always forced to GTC regardless of prior TIF
+    assert captured["qty_in_request"] is None  # no qty passed in -> not included in the replace request
     assert result["stop_price"] == 123.456  # echoed value is the caller's raw input
+    assert result["qty"] is None  # order.qty was None and no qty was requested
+
+
+def test_replace_stop_order_also_corrects_qty_when_given(monkeypatch):
+    fake_order = SimpleNamespace(id="ord-2", symbol="BA", status="new", qty="26")
+    captured = {}
+
+    def fake_replace(order_id, request):
+        captured["qty_in_request"] = request.qty
+        return fake_order
+
+    fake_client = SimpleNamespace(replace_order_by_id=fake_replace)
+    monkeypatch.setattr(alpaca_client, "_get_trading_client", lambda account="default": fake_client)
+
+    result = alpaca_client.replace_stop_order("ord-2", 199.89, qty=26.0)
+
+    assert captured["qty_in_request"] == 26.0
+    assert result["qty"] == 26.0  # echoes the broker's confirmed qty, not just the caller's request
 
 
 # ------------------------------------------------------- filled orders since
